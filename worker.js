@@ -1,30 +1,53 @@
-export default {
-  async fetch(request, env) {
-    const url = new URL(request.url);
+let latest = null;
 
-    // ✅ API endpoint your UI is calling
-    if (url.pathname === "/api/weather") {
-      return new Response(
-        JSON.stringify({
-          temperature: 12.3,
-          humidity: 67,
-          pressure: 1014,
-          timestamp: new Date().toISOString()
-        }),
-        {
-          headers: { "Content-Type": "application/json" }
-        }
-      );
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+
+	export default {
+	  async fetch(request, env, ctx) {
+		const url = new URL(request.url);
+
+		if (url.pathname === "/api/weather" && request.method === "POST") {
+		  const payload = await request.json();   // ← your line
+		  latest = payload;                        // ← your line
+		  return Response.json({ ok: true });      // ← your line
+		}
+
+		if (url.pathname === "/api/weather" && request.method === "GET") {
+		  if (!latest) {
+			return Response.json({ error: "no data yet" }, { status: 404 });
+		  }
+		  return Response.json(latest);
+		}
+
+		return new Response("Not found", { status: 404 });
+	  }
+	};
+
+
+    // ---------------------------------
+    // GET /api/weather (UI → latest)
+    // ---------------------------------
+    if (url.pathname === "/api/weather" && request.method === "GET") {
+      if (!latest) return json({ error: "no data yet" }, 404);
+      return json(latest);
     }
 
-    // Health check (optional)
+    // ---------------------------------
+    // Health check
+    // ---------------------------------
     if (url.pathname === "/api/test") {
-      return new Response(JSON.stringify({ status: "worker-alive" }), {
-        headers: { "Content-Type": "application/json" }
-      });
+      return json({ status: "worker-alive" });
     }
 
-    // ✅ Serve static UI
+    // ---------------------------------
+    // Everything else: let assets serve it
+    // ---------------------------------
     return env.ASSETS.fetch(request);
-  }
+  },
 };
