@@ -1,5 +1,6 @@
-<<<<<<< HEAD
-This repository, right now, just functions as a backup for the actual weather station frontend code. I am using CloudFlare for the actual frontend architectureJust some Readme file edited again and again and once again because of cloudflare crap
-=======
-This repository, right now, just functions as a backup for the actual weather station frontend code. I am using CloudFlare for the actual frontend architecture
->>>>>>> 5de5308b72b2ffef630533daa64925767bcdbc9d
+This repository, right now, just functions as a backup for the actual weather station frontend code. I am using CloudFlare for the actual frontend architecture.
+
+Status: 16-04-2026
+The weather-station is up and running and have been initially polished for pleasent UI experience. More work on this to come. I am using Tailwind CSS for the layout.
+
+https://weather-station.kghansen123.workers.dev/
