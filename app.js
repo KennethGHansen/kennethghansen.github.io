@@ -89,16 +89,66 @@ async function updateWeather() {
   if (typeof w.derived?.barometer_forecast === "string") {
     setText("forecast", w.derived.barometer_forecast.trim());
   }
+
   if (typeof w.derived?.barometer_trend === "string") {
-    setText("trend", w.derived.barometer_trend.trim());
+    const trendText = w.derived.barometer_trend.trim();
+    const trendEl = document.getElementById("trend");
+
+
+    // Default: no arrow, neutral color
+    let displayText = trendText;
+    let color = "text-slate-300";
+
+
+   if (/rising|up/i.test(trendText)) {
+       displayText = `↑ ${trendText}`;
+       color = "text-green-400";
+     } else if (/falling|down/i.test(trendText)) {
+       displayText = `↓ ${trendText}`;
+       color = "text-amber-400";
+     } else if (/steady/i.test(trendText)) {
+       displayText = `→ ${trendText}`;
+       color = "text-slate-300";
+     }
+     trendEl.textContent = displayText;
+     trendEl.className = `text-lg font-medium ${color}`;
   }
+
   if (typeof w.derived?.barometer_storm === "string") {
-    setText("alert", w.derived.barometer_storm.trim());
+    const alertText = w.derived.barometer_storm.trim();
+    const alertEl = document.getElementById("alert");
+
+    setText("alert", alertText);
+
+    // Semantic coloring
+    if (/no storm/i.test(alertText)) {
+      alertEl.className = "text-lg text-green-400";
+    } else if (/watch|warning|possible/i.test(alertText)) {
+      alertEl.className = "text-lg text-amber-400";
+    } else {
+      alertEl.className = "text-lg text-red-400";
+    }
   }
 
   // Air Quality text
   if (typeof w.derived?.air_quality_text === "string") {
-    setText("air-quality", w.derived.air_quality_text.trim());
+    const aqText = w.derived.air_quality_text.trim();
+    const aqEl = document.getElementById("air-quality");
+
+    // Default: show text as-is, neutral color
+    let color = "text-slate-300";
+    let displayText = aqText;
+
+    if (/normal|good/i.test(aqText)) {
+      color = "text-green-400";
+    } else if (/moderate|fair/i.test(aqText)) {
+      color = "text-amber-400";
+    } else if (/poor|bad|unhealthy/i.test(aqText)) {
+      color = "text-red-400";
+    }
+
+    aqEl.textContent = displayText;
+    aqEl.className = `text-lg font-medium ${color}`;
   }
 }
 
