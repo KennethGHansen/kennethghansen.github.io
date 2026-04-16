@@ -13,6 +13,24 @@ function toNumber(v) {
   return null;
 }
 
+const clockEl = document.getElementById("clock");
+// If you truly want a fixed GMT+1 (no DST), use "Etc/GMT-1".
+// If you want Denmark local time with DST, use "Europe/Copenhagen".
+const clockFmt = new Intl.DateTimeFormat("en-GB", {
+  timeZone: "Europe/Copenhagen",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function tickClock() {
+  if (clockEl) clockEl.textContent = clockFmt.format(new Date());
+}
+
+tickClock();
+setInterval(tickClock, 1000);
+
 async function updateWeather() {
   const res = await fetch("/api/weather", { cache: "no-store" });
   const data = await res.json();
