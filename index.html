@@ -38,31 +38,73 @@
   </div>
 
 
-  <div class="p-4 sm:p-6 mt-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-
+  <div id="cards" class="p-4 sm:p-6 mt-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+  
     <!-- Temperature -->
-    <div class="bg-slate-800 rounded-xl p-4">
-      <div class="text-sm text-slate-400">Temperature</div>
-      <div id="temp" class="text-3xl sm:text-4xl lg:text-5xl font-semibold">
-        -- °C
+	<div class="bg-slate-800 rounded-xl p-4">
+	<div class="text-sm text-slate-400 mb-2">Temperature</div>
+
+	<div class="grid grid-cols-2 gap-4">
+    <!-- Inside -->
+    <div>
+      <div class="text-xs text-slate-500 mb-1">Indoor</div>
+      <div id="temp" class="text-3xl sm:text-4xl font-semibold">
+        --.- °C
       </div>
-      <div class="text-xs text-slate-500 mt-1 flex flex-col sm:flex-row sm:gap-2">
+      <div class="text-xs text-slate-500 mt-1 flex gap-2">
         <span>Min <span id="temp-min">--</span></span>
         <span>Max <span id="temp-max">--</span></span>
       </div>
     </div>
 
-    <!-- Humidity -->
-    <div class="bg-slate-800 rounded-xl p-4">
-      <div class="text-sm text-slate-400">Humidity</div>
-      <div id="humidity" class="text-3xl sm:text-4xl lg:text-5xl font-semibold">
-        -- %
+    <!-- Outside (Shelly) -->
+    <div>
+      <div class="text-xs text-slate-500 mb-1">Outdoor</div>
+      <div id="out-temp" class="text-3xl sm:text-4xl font-semibold">
+        --.- °C
       </div>
-      <div class="text-xs text-slate-500 mt-1 flex flex-col sm:flex-row sm:gap-2">
-        <span>Min <span id="hum-min">--</span></span>
-        <span>Max <span id="hum-max">--</span></span>
+      <div class="text-xs text-slate-500 mt-1 flex gap-2">
+        <span>Min <span id="out-temp-min">--</span></span>
+        <span>Max <span id="out-temp-max">--</span></span>
       </div>
+	  <div class="text-xs text-slate-500 mt-1 flex items-center gap-1">
+	     <span>Battery</span>
+	    <span id="shelly-batt">--- %</span>
+	  </div>
     </div>
+	</div>
+	</div>
+
+    <!-- Humidity -->
+	<div class="bg-slate-800 rounded-xl p-4">
+	  <div class="text-sm text-slate-400 mb-2">Humidity</div>
+
+	  <div class="grid grid-cols-2 gap-4">
+		<!-- Inside -->
+		<div>
+		  <div class="text-xs text-slate-500 mb-1">Indoor</div>
+		  <div id="humidity" class="text-3xl sm:text-4xl font-semibold">
+			--.- %
+		  </div>
+		  <div class="text-xs text-slate-500 mt-1 flex gap-2">
+			<span>Min <span id="hum-min">--</span></span>
+			<span>Max <span id="hum-max">--</span></span>
+		  </div>
+		</div>
+
+		<!-- Outside (Shelly) -->
+		<div>
+		  <div class="text-xs text-slate-500 mb-1">Outdoor</div>
+		  <div id="out-humidity" class="text-3xl sm:text-4xl font-semibold">
+			--.- %
+		  </div>
+		  <div class="text-xs text-slate-500 mt-1 flex gap-2">
+			<span>Min <span id="out-hum-min">--</span></span>
+			<span>Max <span id="out-hum-max">--</span></span>
+		  </div>
+		</div>
+	  </div>
+	</div>
 
     <!-- Pressure -->
     <div class="bg-slate-800 rounded-xl p-4">

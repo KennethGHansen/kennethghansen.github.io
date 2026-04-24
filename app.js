@@ -44,6 +44,34 @@ async function updateWeather() {
 
   const dot = document.getElementById("station-dot");
   const label = document.getElementById("station-status");
+  const cards = document.getElementById("cards")
+  
+  
+  // consider station online if last update < 30 seconds ago
+
+  if (lastTs !== null && now - lastTs < 30) {
+    // ONLINE
+    dot.className = "w-3 h-3 rounded-full bg-green-500";
+    label.textContent = "Weather‑Station Online";
+    label.className = "text-sm font-medium text-green-400";
+
+    if (cards) {
+		cards.style.opacity = "1";
+		cards.style.filter = "";
+		cards.style.pointerEvents = "";
+	  }
+	} else {
+	  // OFFLINE
+	  dot.className = "w-3 h-3 rounded-full bg-red-500";
+	  label.textContent = "Weather‑Station Offline";
+	  label.className = "text-sm font-medium text-red-400";
+
+	  if (cards) {
+		cards.style.opacity = "0.4";          // always works
+		cards.style.filter = "grayscale(1)";  // mobile Safari-safe
+		cards.style.pointerEvents = "none";   // optional
+	  }
+	}
 
   // consider station online if last update < 30 seconds ago
   if (lastTs !== null && now - lastTs < 30) {
@@ -102,6 +130,54 @@ async function updateWeather() {
   const pMax = toNumber(mm?.press_max_pa);
   if (pMax !== null) setText("press-max", (pMax).toFixed(0) + " hPa");
 
+  /* ----------------------------------------------------
+   * Outdoor (Shelly BLU H&T)
+   * ---------------------------------------------------- */
+  const sh = w.shelly ?? null;
+
+  if (sh?.ready === true) {
+    // Current outdoor values
+    if (typeof sh.temperature_c === "number") {
+      setText("out-temp", sh.temperature_c.toFixed(1) + " °C");
+    }
+    if (typeof sh.humidity_pct === "number") {
+      setText("out-humidity", sh.humidity_pct.toFixed(1) + " %");
+    }
+	
+    //Battery
+    if (typeof sh.battery_pct === "number") {
+      setText("shelly-batt", sh.battery_pct.toFixed(0) + " %");
+
+      const battEl = document.getElementById("shelly-batt");
+      if (battEl) {
+        // Semantic coloring
+        if (sh.battery_pct < 25) {
+          battEl.className = "text-red-400";
+        } else if (sh.battery_pct < 50) {
+          battEl.className = "text-amber-400";
+        } else {
+          battEl.className = "text-slate-300";
+        }
+      }
+    }
+
+    // Outdoor min/max
+    const omm = sh.minmax ?? null;
+
+    if (omm?.ready === true) {
+      const otMin = toNumber(omm.temp_min_c);
+      if (otMin !== null) setText("out-temp-min", otMin.toFixed(1) + " °C");
+
+      const otMax = toNumber(omm.temp_max_c);
+      if (otMax !== null) setText("out-temp-max", otMax.toFixed(1) + " °C");
+
+      const orhMin = toNumber(omm.rh_min_pct);
+      if (orhMin !== null) setText("out-hum-min", orhMin.toFixed(1) + " %");
+
+      const orhMax = toNumber(omm.rh_max_pct);
+      if (orhMax !== null) setText("out-hum-max", orhMax.toFixed(1) + " %");
+    }
+  }
 
   // Forecast / Trend / Alert
   if (typeof w.derived?.barometer_forecast === "string") {
