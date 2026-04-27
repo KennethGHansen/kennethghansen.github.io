@@ -10,7 +10,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
 </head>
 
-
 <body class="bg-slate-900 text-slate-100 min-h-screen">
 
   <h2 class="text-2xl font-bold px-4 sm:px-6 pt-4 sm:pt-6 mb-4">
@@ -36,8 +35,14 @@
     Local time (GMT+1):
     <span id="clock" class="font-mono text-slate-200">--:--:--</span>
   </div>
-
-
+   
+  <!-- History page button -->  
+  <button id="btn-history" class="ml-4 px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600">
+  History
+  </button>
+   
+  <!-- Overview page -->   
+  <section id="overview-page">
   <div id="cards" class="p-4 sm:p-6 mt-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
   
     <!-- Temperature -->
@@ -143,9 +148,54 @@
       <div class="text-sm text-slate-400">Air Quality</div>
       <div id="air-quality" class="text-lg">--</div>
     </div>
+  </div>
+  </section>
+  
+    
+  <!-- History Page -->
+  <section id="history-page" class="hidden p-4 sm:p-6">
 
+  <!-- Page title -->
+  <h3 class="text-xl font-semibold mb-4">History</h3>
+
+  <!-- Time range selector -->
+  <div class="flex gap-2 mb-4">
+  <button class="time-btn px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600">
+    6h
+  </button>
+
+  <button class="time-btn px-3 py-1 text-sm rounded bg-slate-600 font-semibold">
+    24h
+  </button>
+
+  <button class="time-btn px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600">
+    7d
+  </button>
   </div>
 
+  <!-- Temperature chart -->
+  <div class="bg-slate-800 rounded-xl p-3 mb-4">
+  <canvas id="temp-chart-canvas"></canvas>
+  </div>
+
+  <!-- Humidity chart -->
+  <div class="bg-slate-800 rounded-xl p-3 mb-4">
+  <canvas id="humidity-chart-canvas"></canvas>
+  </div>
+
+  <!-- Pressure chart -->
+  <div class="bg-slate-800 rounded-xl p-3">
+  <canvas id="pressure-chart-canvas"></canvas>
+  </div>
+  
+  <!-- Debug output (temporary, will be removed later) -->
+<div id="history-debug" class="mt-4 text-xs text-slate-400 whitespace-pre font-mono">
+  <!-- History data will be dumped here -->
+</div>
+  
+</section>
+  
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

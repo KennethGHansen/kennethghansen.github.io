@@ -1,3 +1,61 @@
+/* ============================================================================
+ * MOCK HISTORY GENERATOR (frontend only)
+ * ============================================================================
+ *
+ * Generates realistic, smooth time-series data so:
+ * - X-axis meaningfully changes with range buttons
+ * - Indoor and outdoor lines look believable
+ *
+ * No backend, no DB.
+ * ============================================================================
+ */
+
+function generateMockHistory(hours) {
+  const data = [];
+  const now = Math.floor(Date.now() / 1000);
+
+  let indoorTemp = 21.5;
+  let outdoorTemp = 8.0;
+  let pressure = 101300;
+
+  for (let i = hours - 1; i >= 0; i--) {
+    const ts = now - i * 3600;
+
+    // small natural variations
+    indoorTemp += (Math.random() - 0.5) * 0.2;
+    outdoorTemp += (Math.random() - 0.5) * 0.6;
+    pressure += (Math.random() - 0.5) * 15;
+
+    data.push({
+      ts,
+      indoor: {
+        temp_c: Number(indoorTemp.toFixed(2)),
+        hum_pct: 40 + Math.random() * 6,
+        pressure_pa: Number(pressure.toFixed(0))
+      },
+      outdoor: {
+        temp_c: Number(outdoorTemp.toFixed(2)),
+        hum_pct: 75 + Math.random() * 15
+      }
+    });
+  }
+
+  return data;
+}
+
+/* ============================================================================
+ * HISTORY VIEW STATE (frontend only)
+ * ============================================================================
+ *
+ * Purpose:
+ * - Track which time window is currently selected
+ * - Later used to fetch real history data
+ *   (e.g. /api/history?range=24h)
+ * ============================================================================
+ */
+let historyRange = "24h";   // default selection
+
+
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
@@ -241,6 +299,391 @@ async function updateWeather() {
     aqEl.className = `text-lg font-medium ${color}`;
   }
 }
-
 updateWeather();
 setInterval(updateWeather, 3000);
+
+/* ============================================================================
+ * Page Navigation (Overview <-> History)
+ * ============================================================================
+ *
+ * Purpose:
+ * - We currently have two "pages" implemented as <section> blocks:
+ *     1) #overview-page  (your existing live dashboard)
+ *     2) #history-page   (placeholder for graphs)
+ *
+ * - We are NOT navigating to a new URL.
+ * - We are simply toggling visibility by adding/removing the Tailwind "hidden" class.
+ *
+ * Why "hidden":
+ * - Tailwind uses "hidden" to set display: none; so the section is removed
+ *   from layout completely.
+ *
+ * - Using classList.add/remove is widely supported and standard.
+ * ============================================================================
+ */
+
+/* Get references to the DOM elements we need */
+const btnHistory   = document.getElementById("btn-history");     // button user clicks
+const overviewPage = document.getElementById("overview-page");   // live dashboard section
+const historyPage  = document.getElementById("history-page");    // history placeholder section
+
+/* Render all charts in sync */
+function renderAllHistoryCharts(data) {
+  renderTemperatureChart(data);
+  renderHumidityChart(data);
+  renderPressureChart(data);
+}
+
+/* Defensive check:
+ * If any element is missing, do nothing (prevents runtime errors).
+ */
+if (btnHistory && overviewPage && historyPage) {
+
+  /* Attach click handler once.
+   * This runs every time the user taps/clicks the button.
+   */
+  btnHistory.addEventListener("click", () => {
+
+    /* Determine current state:
+     * If historyPage currently has "hidden", then history is not visible.
+     * If it does NOT have "hidden", history is visible.
+     */
+    const historyIsVisible = !historyPage.classList.contains("hidden");
+
+    if (historyIsVisible) {
+      /* ------------------------------------------------------------
+       * Switch to OVERVIEW
+       * ------------------------------------------------------------
+       * - hide history
+       * - show overview
+       * - change button label back to "History"
+       */
+      historyPage.classList.add("hidden");
+      overviewPage.classList.remove("hidden");
+      btnHistory.textContent = "History";
+
+    } else {
+      /* ------------------------------------------------------------
+       * Switch to HISTORY
+       * ------------------------------------------------------------
+       * - hide overview
+       * - show history
+       * - change button label to "Overview" (acts like a back button)
+       */
+      overviewPage.classList.add("hidden");
+      historyPage.classList.remove("hidden");
+      btnHistory.textContent = "Overview";
+	  
+	  /* Load mock history data for current range */
+      const data = getHistoryData(historyRange);
+	  renderAllHistoryCharts(data);
+    }
+  });
+}
+
+/* ============================================================================
+ * History Page – Time Range Selector (UI ONLY)
+ * ============================================================================
+ *
+ * Purpose:
+ * - Visually mark which time window is selected (6h / 24h / 7d)
+ * - No graph updates
+ * - No API calls
+ * - No state persistence
+ *
+ * Behavior:
+ * - Exactly one button is "active" at a time
+ * - Active button is highlighted
+ * - Others revert to normal styling
+ *
+ * This uses classList.add/remove which is the standard way to
+ * toggle UI state in vanilla JavaScript.
+ * ============================================================================
+ */
+
+const timeButtons = document.querySelectorAll(".time-btn");
+
+/* Attach one click handler to each button */
+timeButtons.forEach((btn) => {
+  btn.addEventListener("click", () => {
+
+    /* Clear active styling from all buttons */
+    timeButtons.forEach((b) => {
+      b.classList.remove("bg-slate-600", "font-semibold");
+      b.classList.add("bg-slate-700");
+    });
+
+    /* Mark clicked button as active */
+    btn.classList.remove("bg-slate-700");
+    btn.classList.add("bg-slate-600", "font-semibold");
+
+    /* ------------------------------------------------------------
+     * Update current history range state
+     * ------------------------------------------------------------
+     * We store the value as text ("6h", "24h", "7d").
+     * This mirrors how a backend API will be queried later.
+     */
+    historyRange = btn.textContent.trim();
+
+    console.log("History range selected:", historyRange);
+	
+	/* If we are currently on the History page, re-render */
+	if (!historyPage.classList.contains("hidden")) {
+		const data = getHistoryData(historyRange);
+		renderAllHistoryCharts(data);
+	}
+  });
+});
+
+/* ============================================================================
+ * HISTORY DATA ACCESS (mock only)
+ * ============================================================================
+ *
+ * Purpose:
+ * - Demonstrate that history data can be selected and processed
+ * - Later replaced by fetch("/api/history")
+ * ============================================================================
+ */
+function getHistoryData(range) {
+  switch (range) {
+    case "6h":
+      return generateMockHistory(6);
+    case "24h":
+      return generateMockHistory(24);
+    case "7d":
+      return generateMockHistory(24 * 7);
+    default:
+      return [];
+  }
+}
+
+/* ============================================================================
+ * TEMPERATURE HISTORY CHART (Chart.js)
+ * ============================================================================
+ *
+ * This is our FIRST real visualization.
+ * - Uses mock history data
+ * - Draws Indoor vs Outdoor temperature
+ * - Re-renders when range changes
+ *
+ * Other charts will follow this same pattern.
+ * ============================================================================
+ */
+let tempChart = null;   // keep reference so we can destroy & redraw
+
+function renderTemperatureChart(historyData) {
+  const canvas = document.getElementById("temp-chart-canvas");
+  if (!canvas) return;
+
+  /* Convert history into chart-friendly arrays */
+  const labels = historyData.map(p =>
+  new Date(p.ts * 1000).toLocaleString([], {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit"
+  })
+  );
+
+  const indoorTemps = historyData.map(p => p.indoor.temp_c);
+  const outdoorTemps = historyData.map(p => p.outdoor.temp_c);
+
+  /* Destroy previous chart if it exists (important!) */
+  if (tempChart) {
+    tempChart.destroy();
+    tempChart = null;
+  }
+
+  /* Create the chart */
+  tempChart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Indoor",
+          data: indoorTemps,
+          borderColor: "#38bdf8",
+          backgroundColor: "rgba(56,189,248,0.12)",
+          tension: 0.3
+        },
+        {
+          label: "Outdoor",
+          data: outdoorTemps,
+          borderColor: "#a78bfa",
+          backgroundColor: "rgba(167,139,250,0.12)",
+          tension: 0.3
+        }
+      ]
+    },
+	options: {
+	  responsive: true,
+
+	  plugins: {
+		legend: {
+		  labels: { color: "#e5e7eb" }
+		},
+		// Show full timestamp in tooltip
+		tooltip: {
+		  callbacks: {
+			title: (items) => {
+			  const d = items[0].parsed.x;
+			  return new Date(d).toLocaleString();
+			}
+		  }
+		}
+	  },
+	  scales: {
+		x: {
+			ticks: { color: "#9ca3af" }
+		},
+
+		y: {
+		  ticks: { color: "#9ca3af" },
+		  title: {
+			display: true,
+			text: "°C",
+			color: "#9ca3af"
+		  }
+		}
+	  }
+	}
+  });
+}
+
+/* ============================================================================
+ * HUMIDITY HISTORY CHART (Chart.js)
+ * ============================================================================
+ *
+ * Mirrors the temperature chart logic.
+ * ============================================================================
+ */
+let humidityChart = null;
+
+function renderHumidityChart(historyData) {
+  const canvas = document.getElementById("humidity-chart-canvas");
+  if (!canvas) return;
+
+  const labels = historyData.map(p =>
+    new Date(p.ts * 1000).toLocaleString([], {
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+  );
+
+  const indoorHum = historyData.map(p => p.indoor.hum_pct);
+  const outdoorHum = historyData.map(p => p.outdoor.hum_pct);
+
+  if (humidityChart) {
+    humidityChart.destroy();
+    humidityChart = null;
+  }
+
+  humidityChart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Indoor",
+          data: indoorHum,
+          borderColor: "#34d399",
+          backgroundColor: "rgba(52,211,153,0.12)",
+          tension: 0.3
+        },
+        {
+          label: "Outdoor",
+          data: outdoorHum,
+          borderColor: "#fbbf24",
+          backgroundColor: "rgba(251,191,36,0.12)",
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: "#e5e7eb" } }
+      },
+      scales: {
+        x: { ticks: { color: "#9ca3af" } },
+        y: {
+          ticks: { color: "#9ca3af" },
+          title: {
+            display: true,
+            text: "%",
+            color: "#9ca3af"
+          }
+        }
+      }
+    }
+  });
+}
+
+/* ============================================================================
+ * PRESSURE HISTORY CHART (Chart.js)
+ * ============================================================================
+ *
+ * Shows sea-level pressure (single line).
+ * Uses the same history data and redraw rules as other charts.
+ * ============================================================================
+ */
+
+let pressureChart = null;
+
+function renderPressureChart(historyData) {
+  const canvas = document.getElementById("pressure-chart-canvas");
+  if (!canvas) return;
+
+  // X-axis labels (same strategy as other charts)
+  const labels = historyData.map(p =>
+    new Date(p.ts * 1000).toLocaleString([], {
+      hour: "2-digit",
+      minute: "2-digit"
+    })
+  );
+
+  // Pressure in hPa (convert from Pa)
+  const pressure = historyData.map(
+    p => p.indoor.pressure_pa / 100
+  );
+
+  // Destroy previous chart before re-render
+  if (pressureChart) {
+    pressureChart.destroy();
+    pressureChart = null;
+  }
+
+  pressureChart = new Chart(canvas, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Sea‑level Pressure",
+          data: pressure,
+          borderColor: "#60a5fa",
+          backgroundColor: "rgba(96,165,250,0.12)",
+          tension: 0.3
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: "#e5e7eb" } }
+      },
+      scales: {
+        x: { ticks: { color: "#9ca3af" } },
+        y: {
+          ticks: { color: "#9ca3af" },
+          title: {
+            display: true,
+            text: "hPa",
+            color: "#9ca3af"
+          }
+        }
+      }
+    }
+  });
+}
