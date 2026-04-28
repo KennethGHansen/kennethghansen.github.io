@@ -1,47 +1,166 @@
 /* ============================================================================
- * MOCK HISTORY GENERATOR (frontend only)
+ * HISTORY MOCK CONFIG (your exact requirements)
  * ============================================================================
  *
- * Generates realistic, smooth time-series data so:
- * - X-axis meaningfully changes with range buttons
- * - Indoor and outdoor lines look believable
- *
- * No backend, no DB.
+ * 6h  : every 5 minutes  -> 6*(60/5)   = 72 samples
+ * 24h : every 10 minutes -> 24*(60/10) = 144 samples
+ * 7d  : every hour       -> 7*24       = 168 samples
  * ============================================================================
  */
 
-function generateMockHistory(hours) {
-  const data = [];
+const HISTORY_CFG = {
+  "6h":  { stepSec: 5 * 60,    maxSamples: 72  },
+  "24h": { stepSec: 10 * 60,   maxSamples: 144 },
+  "7d":  { stepSec: 60 * 60,   maxSamples: 168 }
+};
+
+/* ============================================================================
+ * HISTORY BUFFER (sliding window)
+ * ============================================================================
+ *
+ * - historyBuf holds the current window
+ * - historyLastTs tracks the most recent timestamp in the buffer
+ * - historyState holds the running "last values" so the series is smooth
+ * ============================================================================
+ */
+let historyBuf = [];
+let historyLastTs = 0;
+
+let historyState = {
+  indoorTemp: 21.5,
+  outdoorTemp: 8.0,
+  pressurePa: 101300
+};
+
+/* ============================================================================
+ * Seed buffer for a given range
+ * - Creates an initial full window ending at "now"
+ * ============================================================================
+ */
+function seedHistory(range) {
+  const cfg = HISTORY_CFG[range];
+  if (!cfg) return;
+
+  historyBuf = [];
   const now = Math.floor(Date.now() / 1000);
 
-  let indoorTemp = 21.5;
-  let outdoorTemp = 8.0;
-  let pressure = 101300;
+  // earliest timestamp so we end exactly at "now"
+  const startTs = now - (cfg.stepSec * (cfg.maxSamples - 1));
 
-  for (let i = hours - 1; i >= 0; i--) {
-    const ts = now - i * 3600;
+  // reset smooth state (optional)
+  historyState = {
+    indoorTemp: 21.5,
+    outdoorTemp: 8.0,
+    pressurePa: 101300
+  };
 
-    // small natural variations
-    indoorTemp += (Math.random() - 0.5) * 0.2;
-    outdoorTemp += (Math.random() - 0.5) * 0.6;
-    pressure += (Math.random() - 0.5) * 15;
-
-    data.push({
-      ts,
-      indoor: {
-        temp_c: Number(indoorTemp.toFixed(2)),
-        hum_pct: 40 + Math.random() * 6,
-        pressure_pa: Number(pressure.toFixed(0))
-      },
-      outdoor: {
-        temp_c: Number(outdoorTemp.toFixed(2)),
-        hum_pct: 75 + Math.random() * 15
-      }
-    });
+  for (let i = 0; i < cfg.maxSamples; i++) {
+    const ts = startTs + i * cfg.stepSec;
+    historyBuf.push(makeNextSample(ts, cfg.stepSec));
   }
 
-  return data;
+  historyLastTs = historyBuf[historyBuf.length - 1].ts;
 }
+
+/* ============================================================================
+ * Produce next sample (smooth random walk)
+ * - stepSec influences how much values can drift per step
+ * ============================================================================
+ */
+function makeNextSample(ts, stepSec) {
+  // normalize drift by "hours per step" so 5min doesn't drift like 1h
+  const dtHours = stepSec / 3600;
+
+  // small natural variations
+  historyState.indoorTemp += (Math.random() - 0.5) * 0.20 * dtHours;
+  historyState.outdoorTemp += (Math.random() - 0.5) * 0.80 * dtHours;
+  historyState.pressurePa  += (Math.random() - 0.5) * 15.0 * dtHours;
+
+  // humidity: keep in reasonable bands
+  const indoorHum = 42 + (Math.random() - 0.5) * 6;
+  const outdoorHum = 80 + (Math.random() - 0.5) * 20;
+
+  return {
+    ts,
+    indoor: {
+      temp_c: Number(historyState.indoorTemp.toFixed(2)),
+      hum_pct: Number(indoorHum.toFixed(2)),
+      pressure_pa: Number(historyState.pressurePa.toFixed(0))
+    },
+    outdoor: {
+      temp_c: Number(historyState.outdoorTemp.toFixed(2)),
+      hum_pct: Number(outdoorHum.toFixed(2))
+    }
+  };
+}
+
+/* ============================================================================
+ * Push one new sample (sliding window)
+ * - Append newest
+ * - Drop oldest so length stays constant
+ * ============================================================================
+ */
+function pushHistorySample(range) {
+  const cfg = HISTORY_CFG[range];
+  if (!cfg) return;
+
+  const nextTs = historyLastTs + cfg.stepSec;
+  const next = makeNextSample(nextTs, cfg.stepSec);
+
+  historyBuf.push(next);
+  historyLastTs = nextTs;
+
+  // keep fixed window size: drop oldest (left side)
+  while (historyBuf.length > cfg.maxSamples) {
+    historyBuf.shift();
+  }
+}
+
+/* ============================================================================
+ * Public accessor used by the history view
+ * - Ensures the sliding window exists for the selected range
+ * ============================================================================ */
+function getHistoryData(range) {
+  const cfg = HISTORY_CFG[range];
+  if (!cfg) return [];
+
+  if (historyBuf.length !== cfg.maxSamples) {
+    seedHistory(range);
+  }
+  return historyBuf;
+}
+
+
+/* ============================================================================
+ * MOCK "LIVE" HISTORY STREAM (accelerated)
+ * ============================================================================
+ *
+ * Adds ONE new history sample every second, but each sample advances time by:
+ * - 5 min (6h)
+ * - 10 min (24h)
+ * - 1 hour (7d)
+ *
+ * This lets you SEE sliding-window behavior without waiting real minutes/hours.
+ * ============================================================================
+ */
+
+const MOCK_STREAM_MS = 1000;
+setInterval(() => {
+  // only run when history page is visible
+  if (typeof historyPage !== "undefined" && historyPage.classList.contains("hidden")) {
+    return;
+  }
+
+  // ensure seeded
+  getHistoryData(historyRange);
+
+  // push one new sample and redraw
+  pushHistorySample(historyRange);
+  renderAllHistoryCharts(historyBuf);
+
+}, MOCK_STREAM_MS);
+
+
 
 /* ============================================================================
  * HISTORY VIEW STATE (frontend only)
@@ -573,39 +692,15 @@ timeButtons.forEach((btn) => {
      * We store the value as text ("6h", "24h", "7d").
      * This mirrors how a backend API will be queried later.
      */
-    historyRange = btn.textContent.trim();
+	historyRange = btn.textContent.trim();
 
-    console.log("History range selected:", historyRange);
-	
-	/* If we are currently on the History page, re-render */
+	// Then redraw charts
 	if (!historyPage.classList.contains("hidden")) {
-		const data = getHistoryData(historyRange);
-		renderAllHistoryCharts(data);
+	  const data = getHistoryData(historyRange);
+	  renderAllHistoryCharts(data);
 	}
   });
 });
-
-/* ============================================================================
- * HISTORY DATA ACCESS (mock only)
- * ============================================================================
- *
- * Purpose:
- * - Demonstrate that history data can be selected and processed
- * - Later replaced by fetch("/api/history")
- * ============================================================================
- */
-function getHistoryData(range) {
-  switch (range) {
-    case "6h":
-      return generateMockHistory(6);
-    case "24h":
-      return generateMockHistory(24);
-    case "7d":
-      return generateMockHistory(24 * 7);
-    default:
-      return [];
-  }
-}
 
 /* ============================================================================
  * TEMPERATURE HISTORY CHART (Chart.js)
@@ -628,69 +723,48 @@ function renderTemperatureChart(historyData) {
   /* Use fixed amount of labels for the x-axis to avoid clutter */
   const xAxis = buildXAxis(historyData, historyRange);
   const labels = xAxis.labels;
-
-
+  
   const indoorTemps = historyData.map(p => p.indoor.temp_c);
   const outdoorTemps = historyData.map(p => p.outdoor.temp_c);
 
   /* Destroy previous chart if it exists (important!) */
-  if (tempChart) {
-    tempChart.destroy();
-    tempChart = null;
-  }
-
-  /* Create the chart */
-  tempChart = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Indoor",
-          data: indoorTemps,
-          borderColor: "#38bdf8",
-          backgroundColor: "rgba(56,189,248,0.12)",
-          tension: 0.3
-        },
-        {
-          label: "Outdoor",
-          data: outdoorTemps,
-          borderColor: "#a78bfa",
-          backgroundColor: "rgba(167,139,250,0.12)",
-          tension: 0.3
-        }
-      ]
-    },
-	options: {
-	  responsive: true,
-
-	plugins: {
-	  legend: { labels: { color: "#e5e7eb" } },
-	  leftDateStamp: {
-		range: historyRange,
-		firstTs: historyData[0]?.ts
-	  }
-	},
-	scales: {
-			x: {
-				ticks: {
-				  color: "#9ca3af",
-				  autoSkip: false,
-				  maxRotation: 0,
-				  callback: xAxis.tickCallback
-				}
-			},
-			y: {
-			  ticks: { color: "#9ca3af" },
-			  title: {
-				display: true,
-				text: "°C",
-				color: "#9ca3af"
-			}
+	if (!tempChart) {
+	  tempChart = new Chart(canvas, {
+		type: "line",
+		data: {
+		  labels,
+		  datasets: [
+			{ label: "Indoor",  data: indoorTemps,  borderColor: "#38bdf8", backgroundColor: "rgba(56,189,248,0.12)", tension: 0.3 },
+			{ label: "Outdoor", data: outdoorTemps, borderColor: "#a78bfa", backgroundColor: "rgba(167,139,250,0.12)", tension: 0.3 }
+		  ]
+		},
+		options: {
+		  responsive: true,
+		  maintainAspectRatio: false,
+		  plugins: {
+			legend: { labels: { color: "#e5e7eb" } },
+			leftDateStamp: { range: historyRange, firstTs: historyData[0]?.ts }
+		  },
+		  scales: {
+			x: { ticks: { color: "#9ca3af", autoSkip: false, maxRotation: 0, callback: xAxis.tickCallback } },
+			y: { ticks: { color: "#9ca3af" }, title: { display: true, text: "°C", color: "#9ca3af" } }
+		  }
 		}
+	  });
+	} else {
+	  tempChart.data.labels = labels;
+	  tempChart.data.datasets[0].data = indoorTemps;
+	  tempChart.data.datasets[1].data = outdoorTemps;
+
+	  // update plugin options (range/firstTs can change)
+	  tempChart.options.plugins.leftDateStamp = { range: historyRange, firstTs: historyData[0]?.ts };
+
+	  // update tick callback (depends on range)
+	  tempChart.options.scales.x.ticks.callback = xAxis.tickCallback;
+
+	  tempChart.update("none");
 	}
-	}
-  });
+
 }
 
 /* ============================================================================
@@ -705,7 +779,7 @@ let humidityChart = null;
 function renderHumidityChart(historyData) {
   const canvas = document.getElementById("humidity-chart-canvas");
   if (!canvas) return;
-	
+
   /* Use fixed amount of labels for the x-axis to avoid clutter */
   const xAxis = buildXAxis(historyData, historyRange);
   const labels = xAxis.labels;
@@ -713,61 +787,72 @@ function renderHumidityChart(historyData) {
   const indoorHum = historyData.map(p => p.indoor.hum_pct);
   const outdoorHum = historyData.map(p => p.outdoor.hum_pct);
 
-  if (humidityChart) {
-    humidityChart.destroy();
-    humidityChart = null;
-  }
-
-  humidityChart = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Indoor",
-          data: indoorHum,
-          borderColor: "#34d399",
-          backgroundColor: "rgba(52,211,153,0.12)",
-          tension: 0.3
+  if (!humidityChart) {
+    // Create once
+    humidityChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Indoor",
+            data: indoorHum,
+            borderColor: "#34d399",
+            backgroundColor: "rgba(52,211,153,0.12)",
+            tension: 0.3
+          },
+          {
+            label: "Outdoor",
+            data: outdoorHum,
+            borderColor: "#fbbf24",
+            backgroundColor: "rgba(251,191,36,0.12)",
+            tension: 0.3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: "#e5e7eb" } },
+          leftDateStamp: {
+            range: historyRange,
+            firstTs: historyData[0]?.ts,
+            singleLine: false
+          }
         },
-        {
-          label: "Outdoor",
-          data: outdoorHum,
-          borderColor: "#fbbf24",
-          backgroundColor: "rgba(251,191,36,0.12)",
-          tension: 0.3
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-	  plugins: {
-		legend: { labels: { color: "#e5e7eb" } },
-		leftDateStamp: {
-		range: historyRange,
-		firstTs: historyData[0]?.ts
-		}
-	},
-      scales: {  
-		x: {
-			ticks: {
-			  color: "#9ca3af",
-			  autoSkip: false,
-			  maxRotation: 0,
-			  callback: xAxis.tickCallback
-			}
-		},
-        y: {
-          ticks: { color: "#9ca3af" },
-          title: {
-            display: true,
-            text: "%",
-            color: "#9ca3af"
+        scales: {
+          x: {
+            ticks: {
+              color: "#9ca3af",
+              autoSkip: false,
+              maxRotation: 0,
+              callback: xAxis.tickCallback
+            }
+          },
+          y: {
+            ticks: { color: "#9ca3af" },
+            title: { display: true, text: "%", color: "#9ca3af" }
           }
         }
       }
-    }
-  });
+    });
+  } else {
+    // Update in place (no flicker)
+    humidityChart.data.labels = labels;
+    humidityChart.data.datasets[0].data = indoorHum;
+    humidityChart.data.datasets[1].data = outdoorHum;
+
+    humidityChart.options.plugins.leftDateStamp = {
+      range: historyRange,
+      firstTs: historyData[0]?.ts,
+      singleLine: false
+    };
+
+    humidityChart.options.scales.x.ticks.callback = xAxis.tickCallback;
+
+    humidityChart.update("none");
+  }
 }
 
 /* ============================================================================
@@ -790,58 +875,64 @@ function renderPressureChart(historyData) {
   const labels = xAxis.labels;
 
   // Pressure in hPa (convert from Pa)
-  const pressure = historyData.map(
-    p => p.indoor.pressure_pa / 100
-  );
+  const pressure = historyData.map(p => p.indoor.pressure_pa / 100);
 
-  // Destroy previous chart before re-render
-  if (pressureChart) {
-    pressureChart.destroy();
-    pressureChart = null;
-  }
-
-  pressureChart = new Chart(canvas, {
-    type: "line",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "Sea‑level Pressure",
-          data: pressure,
-          borderColor: "#60a5fa",
-          backgroundColor: "rgba(96,165,250,0.12)",
-          tension: 0.3
-        }
-      ]
-    },
-    options: {
-      responsive: true,
-      plugins: {
-		legend: { labels: { color: "#e5e7eb" } },
-		leftDateStamp: {
-		range: historyRange,
-		firstTs: historyData[0]?.ts,
-		singleLine: true 
-	  }
-	},
-      scales: {
-		x: {
-			ticks: {
-			  color: "#9ca3af",
-			  autoSkip: false,
-			  maxRotation: 0,
-			  callback: xAxis.tickCallback
-			}
-		},	
-        y: {
-          ticks: { color: "#9ca3af" },
-          title: {
-            display: true,
-            text: "hPa",
-            color: "#9ca3af"
+  if (!pressureChart) {
+    // Create once
+    pressureChart = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "Sea‑level Pressure",
+            data: pressure,
+            borderColor: "#60a5fa",
+            backgroundColor: "rgba(96,165,250,0.12)",
+            tension: 0.3
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { labels: { color: "#e5e7eb" } },
+          leftDateStamp: {
+            range: historyRange,
+            firstTs: historyData[0]?.ts,
+            singleLine: true
+          }
+        },
+        scales: {
+          x: {
+            ticks: {
+              color: "#9ca3af",
+              autoSkip: false,
+              maxRotation: 0,
+              callback: xAxis.tickCallback
+            }
+          },
+          y: {
+            ticks: { color: "#9ca3af" },
+            title: { display: true, text: "hPa", color: "#9ca3af" }
           }
         }
       }
-    }
-  });
+    });
+  } else {
+    // Update in place (no flicker)
+    pressureChart.data.labels = labels;
+    pressureChart.data.datasets[0].data = pressure;
+
+    pressureChart.options.plugins.leftDateStamp = {
+      range: historyRange,
+      firstTs: historyData[0]?.ts,
+      singleLine: true
+    };
+
+    pressureChart.options.scales.x.ticks.callback = xAxis.tickCallback;
+
+    pressureChart.update("none");
+  }
 }

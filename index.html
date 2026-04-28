@@ -152,47 +152,106 @@
   </section>
   
     
-  <!-- History Page -->
-  <section id="history-page" class="hidden p-4 sm:p-6">
+<section id="history-page" class="hidden">
 
-  <!-- Page title -->
-  <h3 class="text-xl font-semibold mb-4">History</h3>
+  <!-- ============================================================
+       History header
+       - Sticky so time buttons are ALWAYS visible
+       - Does NOT scroll away on desktop
+       ============================================================ -->
+  <div
+    class="sticky top-0 z-20
+           bg-slate-900/95 backdrop-blur
+           border-b border-slate-700">
 
-  <!-- Time range selector -->
-  <div class="flex gap-2 mb-4">
-  <button class="time-btn px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600">
-    6h
-  </button>
 
-  <button class="time-btn px-3 py-1 text-sm rounded bg-slate-600 font-semibold">
-    24h
-  </button>
+	<div class="flex items-center px-4 py-2">
 
-  <button class="time-btn px-3 py-1 text-sm rounded bg-slate-700 hover:bg-slate-600">
-    7d
-  </button>
+	  <!-- Section title -->
+	  <div class="text-sm font-semibold text-slate-300">
+		History
+	  </div>
+
+	  <!-- Time range buttons -->
+	  <!--
+		ml-4        → visual separation from "History"
+		flex        → horizontal row of buttons
+		gap-2       → spacing between buttons
+	  -->
+	  <div class="ml-4 flex items-center gap-2">
+		<button
+		  class="time-btn bg-slate-600 px-3 py-1 rounded">
+		  6h
+		</button>
+
+		<button
+		  class="time-btn bg-slate-700 px-3 py-1 rounded">
+		  24h
+		</button>
+
+		<button
+		  class="time-btn bg-slate-700 px-3 py-1 rounded">
+		  7d
+		</button>
+	  </div>
+	</div>
+
   </div>
 
-  <!-- Temperature chart -->
-  <div class="bg-slate-800 rounded-xl p-3 mb-4">
-  <canvas id="temp-chart-canvas"></canvas>
+  <!-- ============================================================
+       Charts grid
+       - Stacked on mobile
+       - 3 columns on desktop
+       - Heights constrained so all three fit in one viewport
+       ============================================================ -->
+ 
+<!-- ============================================================
+     Scroll wrapper for history charts
+     - Only becomes scrollable for 7d
+     ============================================================ -->
+  <div
+    class="grid gap-4 p-4
+           grid-cols-1
+           lg:grid-cols-3">
+
+    <!-- Temperature chart -->
+    <div class="bg-slate-800 rounded-xl p-3">
+      <div class="text-xs text-slate-400 mb-1">
+        Temperature
+      </div>
+
+      <!-- The RELATIVE container controls chart height -->
+	<div class="chart-container relative h-[26vh] transition-[height] duration-200 ease-out">
+	  <canvas id="temp-chart-canvas"></canvas>
+	</div>
+    </div>
+
+    <!-- Humidity chart -->
+    <div class="bg-slate-800 rounded-xl p-3">
+      <div class="text-xs text-slate-400 mb-1">
+        Humidity
+      </div>
+		
+      <!-- The RELATIVE container controls chart height -->
+	<div class="chart-container relative h-[26vh] transition-[height] duration-200 ease-out">
+	  <canvas id="humidity-chart-canvas"></canvas>
+	</div>
+    </div>
+
+    <!-- Pressure chart -->
+    <div class="bg-slate-800 rounded-xl p-3">
+      <div class="text-xs text-slate-400 mb-1">
+        Pressure
+      </div>
+
+    <!-- The RELATIVE container controls chart height -->
+	<div class="chart-container relative h-[26vh] transition-[height] duration-200 ease-out">
+	  <canvas id="pressure-chart-canvas"></canvas>
+	</div>
+    </div>
+
   </div>
 
-  <!-- Humidity chart -->
-  <div class="bg-slate-800 rounded-xl p-3 mb-4">
-  <canvas id="humidity-chart-canvas"></canvas>
-  </div>
-
-  <!-- Pressure chart -->
-  <div class="bg-slate-800 rounded-xl p-3">
-  <canvas id="pressure-chart-canvas"></canvas>
-  </div>
-  
-  <!-- Debug output (temporary, will be removed later) -->
-<div id="history-debug" class="mt-4 text-xs text-slate-400 whitespace-pre font-mono">
-  <!-- History data will be dumped here -->
-</div>
-  
 </section>
   
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
