@@ -58,7 +58,6 @@ function stopHistoryPolling() {
     historyPollTimer = null;
   }
 }
-``
 
 
 /* ============================================================================
@@ -107,27 +106,6 @@ let historyRange = "24h";   // default selection
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
-}
-
-/* ============================================================================
- * HISTORY UPDATE LIFECYCLE (stub for Step 1)
- * ============================================================================
- *
- * Purpose:
- * - Centralized control over history polling / fetching
- * - EMPTY for now (Step 0)
- * - Will be filled when real history API is wired
- * ============================================================================
- */
-function startHistoryUpdates() {
-  // Step 1 will implement:
-  // - initial history fetch
-  // - polling for new samples
-}
-
-function stopHistoryUpdates() {
-  // Step 1 will implement:
-  // - stopping timers / aborting fetches
 }
 
 // Small helper function that should solve the min/max value confusion (text or string)	
@@ -568,7 +546,7 @@ if (btnHistory && overviewPage && historyPage) {
       historyPage.classList.add("hidden");
       overviewPage.classList.remove("hidden");
       btnHistory.textContent = "History";
-	  stopHistoryUpdates();
+	  stopHistoryPolling();   
 
     } else {
       /* ------------------------------------------------------------
@@ -581,9 +559,17 @@ if (btnHistory && overviewPage && historyPage) {
       overviewPage.classList.add("hidden");
       historyPage.classList.remove("hidden");
       btnHistory.textContent = "Overview";
-	  
-      loadHistoryOnce();          // ✅Step 1 real history read
-	  startHistoryUpdates(); 	 
+	  startHistoryPolling(); 
+	  	  
+	  // IMPORTANT:
+	  // Enforce that the time range UI reflects the TRUE state
+	  // (historyRange is already set to "24h" by default)
+	  // This prevents mismatch like:
+	  //   - 24h data loaded
+	  //   - 6h button highlighted
+	  syncHistoryRangeButtons();
+
+	  // Start controlled polling (includes initial fetch)
     }
   });
 }
@@ -609,6 +595,8 @@ if (btnHistory && overviewPage && historyPage) {
  */
 
 const timeButtons = document.querySelectorAll(".time-btn");
+
+syncHistoryRangeButtons();  // ensure the highlight matches the default state on load
 
 /* Attach one click handler to each button */
 timeButtons.forEach((btn) => {
@@ -639,6 +627,49 @@ timeButtons.forEach((btn) => {
 	}
   });
 });
+
+/* ============================================================================
+ * Sync History Range Buttons to historyRange (SOURCE OF TRUTH)
+ * ============================================================================
+ *
+ * PURPOSE:
+ * - Enforce a strict rule:
+ *     historyRange controls the UI, never the other way around
+ *
+ * WHEN THIS MUST BE CALLED:
+ * - Whenever History becomes visible
+ * - Whenever historyRange is changed programmatically
+ *
+ * WHAT THIS DOES:
+ * - Iterates over all time range buttons (6h / 24h / 7d)
+ * - Highlights the ONE button whose label matches historyRange
+ * - De-highlights all others
+ *
+ * WHAT THIS FUNCTION DOES *NOT* DO:
+ * - Does NOT fetch data
+ * - Does NOT change historyRange
+ * - Does NOT start timers
+ * - Does NOT render charts
+ *
+ * This is PURE UI state synchronization.
+ * ============================================================================
+ */
+function syncHistoryRangeButtons() {
+  timeButtons.forEach(btn => {
+    // Extract the textual label from the button ("6h", "24h", "7d")
+    const btnRange = btn.textContent.trim();
+
+    // Determine if THIS button represents the active range
+    const isActive = btnRange === historyRange;
+
+    // Apply active styling ONLY if this button matches historyRange
+    btn.classList.toggle("bg-slate-600", isActive);
+    btn.classList.toggle("font-semibold", isActive);
+
+    // Ensure all inactive buttons revert to normal styling
+    btn.classList.toggle("bg-slate-700", !isActive);
+  });
+}
 
 
 /* ============================================================================
@@ -688,9 +719,10 @@ function renderTemperatureChart(historyData) {
             borderColor: "#38bdf8",
             backgroundColor: "rgba(56,189,248,0.12)",
             tension: 0,
-            spanGaps: true,
+            spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
-            pointRadius: 4,
+            pointRadius: 0,		// no visible dot clutter
+			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -700,9 +732,10 @@ function renderTemperatureChart(historyData) {
             borderColor: "#a78bfa",
             backgroundColor: "rgba(167,139,250,0.12)",
             tension: 0,
-            spanGaps: true,
+            spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
-            pointRadius: 4,
+            pointRadius: 0,		// no visible dot clutter
+			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -789,9 +822,10 @@ function renderHumidityChart(historyData) {
             borderColor: "#34d399",
             backgroundColor: "rgba(52,211,153,0.12)",
             tension: 0,
-            spanGaps: true,
+            spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
-            pointRadius: 4,
+            pointRadius: 0,		// no visible dot clutter
+			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -801,9 +835,10 @@ function renderHumidityChart(historyData) {
             borderColor: "#fbbf24",
             backgroundColor: "rgba(251,191,36,0.12)",
             tension: 0,
-            spanGaps: true,
+            spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
-            pointRadius: 4,
+            pointRadius: 0,		// no visible dot clutter
+			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -889,9 +924,10 @@ function renderPressureChart(historyData) {
             borderColor: "#60a5fa",
             backgroundColor: "rgba(96,165,250,0.12)",
             tension: 0,
-            spanGaps: true,
+            spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
-            pointRadius: 4,
+            pointRadius: 0,		// no visible dot clutter
+			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           }
