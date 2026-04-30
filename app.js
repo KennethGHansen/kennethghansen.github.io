@@ -1,3 +1,32 @@
+// ===============================
+// Hidden DEV toggle for data mode
+// ===============================
+(function setupHiddenDataModeToggle() {
+  const KEY = "weather_data_mode"; // "sim" | "real"
+  const DEFAULT_MODE = "sim";
+
+  if (!localStorage.getItem(KEY)) {
+    localStorage.setItem(KEY, DEFAULT_MODE);
+  }
+
+  // Ctrl + Alt + D toggles mode
+  window.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.altKey && e.code === "KeyD") {
+      const current = localStorage.getItem(KEY) || DEFAULT_MODE;
+      const next = current === "sim" ? "real" : "sim";
+      localStorage.setItem(KEY, next);
+
+	alert(`DEV data mode: ${next.toUpperCase()}`);
+
+      // Force refresh so graphs refetch
+      location.reload();
+    }
+  });
+
+  window.__getWeatherDataMode = () =>
+    localStorage.getItem(KEY) || DEFAULT_MODE;
+})();
+
 /* ============================================================================
  * STEP 1 — Load history snapshot (one-shot, no polling)
  * ============================================================================
@@ -5,7 +34,29 @@
 async function loadHistoryOnce() {
 	console.log("loadHistoryOnce CALLED"); // TEMP DEBUG
   try {
-    const res = await fetch(`/api/history?range=${historyRange}`, {
+    // ============================================================
+    // DATA MODE (hidden toggle)
+    // ============================================================
+    // - "sim"  => simulated history (safe, no DO/SQLite)
+    // - "real" => real history (server may still refuse if disabled)
+    //
+    // IMPORTANT:
+    // This is NOT security. It is only a *client preference*.
+    // The server remains authoritative and may return empty samples for "real".
+    // ============================================================
+    const mode =
+      (typeof window.__getWeatherDataMode === "function")
+        ? window.__getWeatherDataMode()   // returns "sim" or "real"
+        : "sim";                          // safe default
+
+    // ============================================================
+    // HISTORY REQUEST (mode is appended as a query param)
+    // ============================================================
+    // This ensures the history endpoint can switch between:
+    //   /api/history?range=24h&mode=sim
+    //   /api/history?range=24h&mode=real
+    // ============================================================
+    const res = await fetch(`/api/history?range=${historyRange}&mode=${encodeURIComponent(mode)}`, {
       cache: "no-store"
     });
 
@@ -18,7 +69,9 @@ async function loadHistoryOnce() {
     const data = await res.json();
 
     // Defensive: ensure array
-    const samples = Array.isArray(data.samples) ? data.samples : [];
+    const samples = (Array.isArray(data.samples) ? data.samples : [])
+	.slice()
+	.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
 
     // Cache locally (future steps will reuse this)
     historyBuf = samples;
@@ -58,7 +111,6 @@ function stopHistoryPolling() {
     historyPollTimer = null;
   }
 }
-
 
 /* ============================================================================
  * HISTORY WINDOW CONFIG (authoritative UI contract)
@@ -159,127 +211,25 @@ function formatXAxisLabel(ts, range) {
 /* Build labels array + tick callback */
 function buildXAxis(historyData, range) {
   const len = historyData.length;
+  if (len === 0) {
+    return { labels: [], tickCallback: () => "" };
+  }
 
-  // pick exactly 6 evenly spaced indices
   const indices = [];
   for (let i = 0; i < 6; i++) {
     indices.push(Math.round(i * (len - 1) / 5));
   }
-  
   const indexSet = new Set(indices);
 
   return {
-		labels: historyData.map((p, i) =>
-		  indexSet.has(i) ? formatXAxisLabel(p.ts, range) : ""
-	),
-
-    tickCallback: function (val) {
-      // show only the pre‑formatted label
-      return this.getLabelForValue(val) || "";
+    labels: historyData.map((p, i) =>
+      indexSet.has(i) ? formatXAxisLabel(p.ts, range) : ""
+    ),
+    tickCallback(value) {
+      return this.getLabelForValue(value) || "";
     }
   };
 }
-
-/* ============================================================================
- * LEFT-ALIGNED DATE STAMP PLUGIN
- * ============================================================================
- *
- * - Used for 6h and 24h views only
- * - Renders a date label inside the chart area
- * - Does NOT consume axis space
- * - Mobile-safe
- * ============================================================================
- */
-const leftDateStampPlugin = {
-  id: "leftDateStamp",
-
-afterDatasetsDraw(chart, args, pluginOptions) {
-  /* ------------------------------------------------------------------------
-   * LEFT DATE STAMP (6h / 24h only)
-   *
-   * Supports TWO layouts:
-   * - Two-line (day / month): temperature, humidity
-   * - Single-line (day month): pressure
-   *
-   * Layout is controlled by plugin option:
-   *   singleLine: true | false
-   * ------------------------------------------------------------------------ */
-
-  const { ctx } = chart;
-  const { range, firstTs, singleLine } = pluginOptions || {};
-
-  if (range !== "6h" && range !== "24h") return;
-  if (!firstTs) return;
-
-  const xScale = chart.scales?.x;
-  if (!xScale || !xScale.ticks || xScale.ticks.length === 0) return;
-
-  // Build date parts
-  const d = new Date(firstTs * 1000);
-  const dayText   = d.toLocaleDateString([], { day: "2-digit" });
-  const monthText = d.toLocaleDateString([], { month: "short" });
-  const oneLineText = `${dayText} ${monthText}`;
-
-  // Match x‑axis tick font
-  const tickFont = Chart.helpers.toFont(xScale.options.ticks.font);
-
-  ctx.save();
-  ctx.font = tickFont.string;
-  ctx.fillStyle = "#9ca3af";
-
-  // Anchor to FIRST tick
-  const tickX = xScale.getPixelForTick(0);
-
-  // Measure first time label width (so we avoid overlap)
-  const firstTimeLabel =
-    typeof xScale.getLabelForValue === "function"
-      ? xScale.getLabelForValue(0)
-      : "";
-
-  const timeLabelWidth = firstTimeLabel
-    ? ctx.measureText(firstTimeLabel).width
-    : 0;
-
-  // Measure date width (depends on mode)
-  const dateWidth = singleLine
-    ? ctx.measureText(oneLineText).width
-    : Math.max(
-        ctx.measureText(dayText).width,
-        ctx.measureText(monthText).width
-      );
-
-  // Horizontal placement:
-  // [ DATE ][ GAP ][ TIME ]
-  const GAP_PX = 8;
-  const x =
-    tickX
-    - (timeLabelWidth / 2)
-    - GAP_PX
-    - (dateWidth / 2);
-
-  // Vertical placement — your calibrated value
-  const lh = tickFont.lineHeight;
-  const Y_NUDGE_PX = -5.5;
-  const baseY = xScale.bottom + Y_NUDGE_PX;
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "alphabetic";
-
-  if (singleLine) {
-    // Pressure: single-line date
-    ctx.fillText(oneLineText, x, baseY);
-  } else {
-    // Temp / Hum: two-line date
-    ctx.fillText(dayText,   x, baseY - lh);
-    ctx.fillText(monthText, x, baseY);
-  }
-
-  ctx.restore();
-}
-};
-
-// register plugin ONCE (before any new Chart(...))
-Chart.register(leftDateStampPlugin);
 
 /* ============================================================================
  * Update weather function
@@ -703,7 +653,24 @@ function renderTemperatureChart(historyData) {
 	  (typeof p?.weather?.temp === "number") ? p.weather.temp : null
 	);
 
-  const outdoorTemps = dataArr.map(_ => null); // no outdoor temp yet
+  // ---------------------------------------------------------------------------
+  // OUTDOOR TEMPERATURE SERIES (history)
+  // ---------------------------------------------------------------------------
+  // WHY THIS EXISTS:
+  // - Your backend (SIM + REAL) includes outdoor measurements under:
+  //     weather.shelly.temperature_c
+  // - Previously we hard-coded outdoorTemps to null, so the chart was blank.
+  //
+  // DESIGN RULES:
+  // 1) Use ONLY real numeric values.
+  // 2) If the value is missing, return null (so Chart.js shows a gap).
+  // 3) Do not convert units here (value is already °C).
+  // ---------------------------------------------------------------------------
+	const outdoorTemps = dataArr.map(p =>
+	  (typeof p?.weather?.shelly?.temperature_c === "number")
+		? p.weather.shelly.temperature_c
+		: null
+	);
 
   const firstTs = dataArr.length > 0 ? dataArr[0].ts : null;
 
@@ -722,7 +689,6 @@ function renderTemperatureChart(historyData) {
             spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
             pointRadius: 0,		// no visible dot clutter
-			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -735,7 +701,6 @@ function renderTemperatureChart(historyData) {
             spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
             pointRadius: 0,		// no visible dot clutter
-			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -743,10 +708,10 @@ function renderTemperatureChart(historyData) {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false,
+        maintainAspectRatio: false,		
+	
         plugins: {
           legend: { labels: { color: "#e5e7eb" } },
-          leftDateStamp: { range: historyRange, firstTs }
         },
         scales: {
           x: {
@@ -805,9 +770,25 @@ function renderHumidityChart(historyData) {
 	  (typeof p?.weather?.hum === "number") ? p.weather.hum : null
 	);
 
-  const outdoorHum = dataArr.map(_ => null); // no outdoor humidity yet
-
-
+  // ---------------------------------------------------------------------------
+  // OUTDOOR HUMIDITY SERIES (history)
+  // ---------------------------------------------------------------------------
+  // WHY THIS EXISTS:
+  // - Your backend (SIM + REAL) includes outdoor humidity under:
+  //     weather.shelly.humidity_pct
+  // - Previously we hard-coded outdoorHum to null, so the chart was blank.
+  //
+  // DESIGN RULES:
+  // 1) Use ONLY real numeric values.
+  // 2) If the value is missing, return null (so Chart.js shows a gap).
+  // 3) Units are already percent (%) so no conversion is needed.
+  // ---------------------------------------------------------------------------
+  const outdoorHum = dataArr.map(p =>
+    (typeof p?.weather?.shelly?.humidity_pct === "number")
+      ? p.weather.shelly.humidity_pct
+      : null
+  );
+  
   const firstTs = dataArr.length > 0 ? dataArr[0].ts : null;
 
   if (!humidityChart) {
@@ -825,7 +806,6 @@ function renderHumidityChart(historyData) {
             spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
             pointRadius: 0,		// no visible dot clutter
-			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -838,7 +818,6 @@ function renderHumidityChart(historyData) {
             spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
             pointRadius: 0,		// no visible dot clutter
-			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -847,9 +826,9 @@ function renderHumidityChart(historyData) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+		
         plugins: {
           legend: { labels: { color: "#e5e7eb" } },
-          leftDateStamp: { range: historyRange, firstTs, singleLine: false }
         },
         scales: {
           x: {
@@ -927,7 +906,6 @@ function renderPressureChart(historyData) {
             spanGaps: false,  // show real gaps (missing buckets stay empty)
             showLine: true,
             pointRadius: 0,		// no visible dot clutter
-			pointHitRadius: 6, 
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -936,9 +914,9 @@ function renderPressureChart(historyData) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
+	
         plugins: {
           legend: { labels: { color: "#e5e7eb" } },
-          leftDateStamp: { range: historyRange, firstTs, singleLine: true }
         },
         scales: {
           x: {
