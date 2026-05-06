@@ -3,14 +3,15 @@
 // ===============================
 (function setupHiddenDataModeToggle() {
   const KEY = "weather_data_mode"; // "sim" | "real"
-  const DEFAULT_MODE = "sim";
+  const DEFAULT_MODE = "real";
 
-  if (!localStorage.getItem(KEY)) {
-    localStorage.setItem(KEY, DEFAULT_MODE);
-  }
+// Initialize only if missing
+if (localStorage.getItem(KEY) !== "real") {
+  localStorage.setItem(KEY, DEFAULT_MODE); // DEFAULT_MODE is now "real"
+}
 
-  // Ctrl + Alt + D toggles mode
-  window.addEventListener("keydown", (e) => {
+// Ctrl + Alt + D toggles mode
+window.addEventListener("keydown", (e) => {
     if (e.ctrlKey && e.altKey && e.code === "KeyD") {
       const current = localStorage.getItem(KEY) || DEFAULT_MODE;
       const next = current === "sim" ? "real" : "sim";
@@ -21,9 +22,9 @@
       // Force refresh so graphs refetch
       location.reload();
     }
-  });
+});
 
-  window.__getWeatherDataMode = () =>
+window.__getWeatherDataMode = () =>
     localStorage.getItem(KEY) || DEFAULT_MODE;
 })();
 
@@ -807,7 +808,8 @@ function renderTemperatureChart(historyData) {
             tension: 0,
             spanGaps: false,
             showLine: true,
-            pointRadius: 0,
+			// NEW: show a dot for real samples, hide points for nulls
+			pointRadius: (ctx) => (ctx.raw == null ? 0 : 2),
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -819,8 +821,9 @@ function renderTemperatureChart(historyData) {
             tension: 0,
             spanGaps: false,
             showLine: true,
-            pointRadius: 0,
-            pointHoverRadius: 6,
+            // NEW: show a dot for real samples, hide points for nulls
+			pointRadius: (ctx) => (ctx.raw == null ? 0 : 2),
+            pointHoverRadius: 3,
             borderWidth: 2
           }
         ]
@@ -918,8 +921,9 @@ function renderHumidityChart(historyData) {
             tension: 0,
             spanGaps: false,
             showLine: true,
-            pointRadius: 0,
-            pointHoverRadius: 6,
+			// NEW: show a dot for real samples, hide points for nulls
+			pointRadius: (ctx) => (ctx.raw == null ? 0 : 2),
+			pointHoverRadius: 6,
             borderWidth: 2
           },
           {
@@ -930,7 +934,8 @@ function renderHumidityChart(historyData) {
             tension: 0,
             spanGaps: false,
             showLine: true,
-            pointRadius: 0,
+            // NEW: show a dot for real samples, hide points for nulls
+			pointRadius: (ctx) => (ctx.raw == null ? 0 : 2),
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -1022,8 +1027,9 @@ function renderPressureChart(historyData) {
             backgroundColor: "rgba(96,165,250,0.12)",
             tension: 0,
             spanGaps: false,
-            showLine: true,
-            pointRadius: 0,
+            showLine: true, 
+			// NEW: show a dot for real samples, hide points for nulls
+			pointRadius: (ctx) => (ctx.raw == null ? 0 : 2),
             pointHoverRadius: 6,
             borderWidth: 2
           }

@@ -38,6 +38,48 @@ const HISTORY_CFG = {
   "7d":  { stepSec: 60 * 60,   maxSamples: 168, windowSec: 7 * 86400  },
 };
 
+ // NEW: lastOutdoor is optional and provides latched fallback values for Shelly.
+  function normalizeForHistory(payload, lastOutdoor = null) {
+
+  const temp =
+    (typeof payload?.temp === "number") ? payload.temp :
+    (typeof payload?.raw?.temperature_c === "number") ? payload.raw.temperature_c :
+    null;
+
+  const hum =
+    (typeof payload?.hum === "number") ? payload.hum :
+    (typeof payload?.raw?.humidity_pct === "number") ? payload.raw.humidity_pct :
+    null;
+
+  const pressurePa =
+    (typeof payload?.pressure === "number") ? payload.pressure :
+    (typeof payload?.derived?.sea_level_pressure_pa === "number") ? payload.derived.sea_level_pressure_pa :
+    (typeof payload?.raw?.pressure_pa === "number") ? payload.raw.pressure_pa :
+    null;
+
+	const outTemp =
+	  (typeof payload?.shelly?.temperature_c === "number") ? payload.shelly.temperature_c :
+	  (typeof lastOutdoor?.temperature_c === "number") ? lastOutdoor.temperature_c :
+	  null;
+
+	const outHum =
+	  (typeof payload?.shelly?.humidity_pct === "number") ? payload.shelly.humidity_pct :
+	  (typeof lastOutdoor?.humidity_pct === "number") ? lastOutdoor.humidity_pct :
+	  null;
+
+  return {
+    temp,
+    hum,
+    pressure: pressurePa,
+    shelly: {
+      temperature_c: outTemp,
+      humidity_pct: outHum
+    }
+  };
+}
+
+
+
 /* ============================================================================ */
 /* SIMULATED HISTORY (FIXTURE MODE)                                             */
 /* ============================================================================ */
@@ -178,18 +220,22 @@ export class WeatherDO {
     this.ctx = ctx;
     this.env = env;
     this.latest = null;
+	
+	// NEW: latched last-known outdoor readings (Shelly)
+	// These are used when sampling history so we don't miss outdoor data at boundaries.
+	this.lastOutdoor = { temperature_c: null, humidity_pct: null }; // NEW
 
-    // NEW: persistent gatekeeper timestamp (seconds)
-    this.lastHistWriteTs = 0;
+	// NEW: deterministic sampling state per range (aligned to step boundaries)
+	this.lastSampleTsByRange = { "6h": 0, "24h": 0, "7d": 0 };
 
     this.ctx.blockConcurrencyWhile(async () => {
       this.latest = await this.ctx.storage.get("latest");
-      // NEW: load gatekeeper timestamp from storage
-      
-    this.lastHistWriteTs = Math.min(
-		(await this.ctx.storage.get("lastHistWriteTs")) ?? 0,
-		Math.floor(Date.now() / 1000)
-	);
+
+	// NEW: load latched outdoor readings from storage (if any)
+	this.lastOutdoor =(await this.ctx.storage.get("lastOutdoor")) ?? { temperature_c: null, humidity_pct: null };
+	  
+	// NEW: load per-range sampler state from storage
+    this.lastSampleTsByRange =(await this.ctx.storage.get("lastSampleTsByRange")) ?? { "6h": 0, "24h": 0, "7d": 0 };
     });
   }
 
@@ -207,24 +253,52 @@ export class WeatherDO {
 
       this.latest = record;
       await this.ctx.storage.put("latest", record);
+	  
+	  // NEW: latch last-known outdoor readings whenever present in the incoming record
+	  // We latch from record.weather.shelly (the live payload) if it contains numbers.
+	  const sh = record?.weather?.shelly; // NEW
+	  let outdoorChanged = false;          // NEW
 
-      // NEW: gatekeeper logic (history write decision)
-      // - Does NOT increase request count
-      // - Only adds a tiny KV write occasionally
-      const HISTORY_EVERY_SEC = 60; // <-- choose 30 or 60 (start with 60)
-      const nowTs = record?.ts;
+	  if (typeof sh?.temperature_c === "number") {
+		  this.lastOutdoor.temperature_c = sh.temperature_c;
+		  outdoorChanged = true;
+	  }
+	  if (typeof sh?.humidity_pct === "number") {
+		  this.lastOutdoor.humidity_pct = sh.humidity_pct;
+		  outdoorChanged = true;
+	  }
 
-      let shouldWriteHistory = false;
-      if (typeof nowTs === "number") {
-        if ((nowTs - this.lastHistWriteTs) >= HISTORY_EVERY_SEC) {
-          shouldWriteHistory = true;
-          this.lastHistWriteTs = nowTs;
-          await this.ctx.storage.put("lastHistWriteTs", nowTs);
-        }
-      }
+		// NEW: persist latches only when we actually updated them
+		if (outdoorChanged) {
+		  await this.ctx.storage.put("lastOutdoor", this.lastOutdoor);
+		}
+	  
 
-      // NEW: return the decision to the Worker
-      return json({ ok: true, shouldWriteHistory });
+	// NEW: deterministic sampling decisions (aligned to exact boundaries)
+	// - Returns 0..3 due samples (6h/24h/7d) to the Worker.
+	// - Each range writes exactly once per aligned timestamp.
+	const nowTs = record?.ts;
+	const dueSamples = []; // NEW
+
+	if (typeof nowTs === "number") {
+	  for (const range of ["6h", "24h", "7d"]) {
+		const step = HISTORY_CFG[range].stepSec;               // NEW
+		const sampleTs = Math.floor(nowTs / step) * step;      // NEW: aligned timestamp
+		const lastTs = this.lastSampleTsByRange?.[range] ?? 0; // NEW
+
+		if (sampleTs > lastTs) {
+		  dueSamples.push({ range, ts: sampleTs });            // NEW
+		  this.lastSampleTsByRange[range] = sampleTs;          // NEW
+		}
+	  }
+
+	  // NEW: persist only when changed
+	  if (dueSamples.length > 0) {
+		await this.ctx.storage.put("lastSampleTsByRange", this.lastSampleTsByRange);
+	  }
+	}
+	// NEW: include latched outdoor values so Worker can build complete history snapshots
+	return json({ ok: true, dueSamples, lastOutdoor: this.lastOutdoor });
     }
 
     // GET /latest -> return latest
@@ -247,132 +321,135 @@ export class WeatherHistoryDO {
     this.env = env;
     this.sql = this.ctx.storage.sql;
 
-    this.ctx.blockConcurrencyWhile(async () => {
-      this.sql.exec(`
-        CREATE TABLE IF NOT EXISTS samples (
-          ts INTEGER PRIMARY KEY,
-          boot_id INTEGER,
-          weather_json TEXT NOT NULL
-        );
-      `);
-      this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_samples_ts ON samples(ts);`);
-    });
+	this.ctx.blockConcurrencyWhile(async () => {
+	  // NEW: one table per range so each has its own ts primary key timeline
+	  this.sql.exec(`
+		CREATE TABLE IF NOT EXISTS samples_6h (
+		  ts INTEGER PRIMARY KEY,
+		  boot_id INTEGER,
+		  weather_json TEXT NOT NULL
+		);
+	  `);
+	  this.sql.exec(`
+		CREATE TABLE IF NOT EXISTS samples_24h (
+		  ts INTEGER PRIMARY KEY,
+		  boot_id INTEGER,
+		  weather_json TEXT NOT NULL
+		);
+	  `);
+	  this.sql.exec(`
+		CREATE TABLE IF NOT EXISTS samples_7d (
+		  ts INTEGER PRIMARY KEY,
+		  boot_id INTEGER,
+		  weather_json TEXT NOT NULL
+		);
+	  `);
+
+	  // NEW: indexes (optional)
+	  this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_samples_6h_ts ON samples_6h(ts);`);
+	  this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_samples_24h_ts ON samples_24h(ts);`);
+	  this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_samples_7d_ts ON samples_7d(ts);`);
+	});
   }
 
   async fetch(request) {
     const url = new URL(request.url);
 
-    // POST /record -> insert one row
-    if (url.pathname === "/record" && request.method === "POST") {
-      const record = await request.json(); // FIX: must parse JSON before using record.*
-	  
-	// TEMP DEBUG — inspect what is actually stored in history
-	console.log(
-	  "[HIST DEBUG]",
-	  "record keys:", Object.keys(record || {}),
-	  "weather keys:", Object.keys(record?.weather || {}),
-	  "weather payload:", JSON.stringify(record?.weather).slice(0, 500)
-	);
+	// NEW: POST /record_batch -> insert deterministic samples (0..3) in one request.
+	// This avoids any bucket/AVG logic: we store the snapshot at the exact aligned ts.
+	if (url.pathname === "/record_batch" && request.method === "POST") {
+	  const body = await request.json();
 
-      console.log("[REAL-HIST] WeatherHistoryDO RECORD ts =", record.ts); // (your debug) now safe
+	  const samples = Array.isArray(body?.samples) ? body.samples : [];
+	  const bootId = body?.boot_id ?? null;
+	  const weather = body?.weather ?? null;
 
-      this.sql.exec(
-        "INSERT OR REPLACE INTO samples (ts, boot_id, weather_json) VALUES (?, ?, ?)",
-        record.ts,
-        record.boot_id ?? null,
-        JSON.stringify(record.weather)
-      );
+	  // NEW: require normalized weather object
+	  if (!weather || typeof weather !== "object") {
+		return json({ error: "missing weather" }, 400);
+	  }
 
-      // retention: keep 10 days
-      const RETENTION_SEC = 10 * 24 * 60 * 60;
-      const cutoff = record.ts - RETENTION_SEC;
-      this.sql.exec("DELETE FROM samples WHERE ts < ?", cutoff);
+	  // NEW: retention (keep 10 days)
+	  const RETENTION_SEC = 10 * 24 * 60 * 60;
 
-      return json({ ok: true });
-    }
+	  for (const s of samples) {
+		const range = s?.range;
+		const ts = s?.ts;
 
-    // GET /history?range=...
-    if (url.pathname === "/history" && request.method === "GET") {
-      const range = url.searchParams.get("range");
-      const cfg = HISTORY_CFG[range];
-      if (!cfg) return json({ error: "invalid range" }, 400);
+		if (!["6h", "24h", "7d"].includes(range)) continue;
+		if (typeof ts !== "number" || !Number.isFinite(ts)) continue;
 
-      const BUCKET_SEC = cfg.stepSec;
+		const table =
+		  (range === "6h") ? "samples_6h" :
+		  (range === "24h") ? "samples_24h" :
+		  "samples_7d";
 
-      // anchor to latest real sample bucket (freeze on outage)
-      // FIX: DO SQLite exec() doesn't use `.one()` reliably; use `.toArray()[0]`.
-      const rows = this.sql.exec(
-        "SELECT MAX(ts) AS latest_ts FROM samples"
-      ).toArray();
+		this.sql.exec(
+		  `INSERT OR REPLACE INTO ${table} (ts, boot_id, weather_json) VALUES (?, ?, ?)`,
+		  ts,
+		  bootId,
+		  JSON.stringify(weather)
+		);
 
-      const latestTs = rows[0]?.latest_ts; // FIX: was latestRow?.latest_ts (undefined)
+		const cutoff = ts - RETENTION_SEC;
+		this.sql.exec(`DELETE FROM ${table} WHERE ts < ?`, cutoff);
+	  }
 
-      if (typeof latestTs !== "number" || !Number.isFinite(latestTs)) {
-        return json({ samples: [] });
-      }
+	  return json({ ok: true });
+	}
 
-      
+	// GET /history?range=...
+	if (url.pathname === "/history" && request.method === "GET") {
+	  const range = url.searchParams.get("range");
+	  const cfg = HISTORY_CFG[range];
+	  if (!cfg) return json({ error: "invalid range" }, 400);
+
+	  const step = cfg.stepSec;
+
+	  // NEW: pick correct table
+	  const table =
+		(range === "6h") ? "samples_6h" :
+		(range === "24h") ? "samples_24h" :
+		"samples_7d";
+
+	  // NEW: deterministic aligned window
 	  const now = Math.floor(Date.now() / 1000);
-	  const endBucket = Math.floor(now / BUCKET_SEC) * BUCKET_SEC;
+	  const endTs = Math.floor(now / step) * step;
+	  const startTs = endTs - (cfg.maxSamples - 1) * step;
 
-      const startBucket = endBucket - (cfg.maxSamples - 1) * BUCKET_SEC;
-      const endInclusive = endBucket + (BUCKET_SEC - 1);
+	  // NEW: read stored samples
+	  const rows = this.sql.exec(
+		`SELECT ts, boot_id, weather_json FROM ${table} WHERE ts >= ? AND ts <= ? ORDER BY ts ASC`,
+		startTs,
+		endTs
+	  ).toArray();
 
-      // build full bucket timeline (always N buckets)
-      const buckets = [];
-      for (let i = 0; i < cfg.maxSamples; i++) {
-        buckets.push(startBucket + i * BUCKET_SEC);
-      }
+	  const byTs = new Map();
+	  for (const r of rows) {
+		let weather;
+		try { weather = JSON.parse(r.weather_json); } catch { weather = null; }
+		byTs.set(r.ts, { boot_id: r.boot_id ?? null, weather });
+	  }
 
-	// aggregate real rows into buckets
-	// FIXES:
-	// 1) Use explicit JSON paths that match what you store: temp/hum/pressure/shelly.*
-	// 2) Include out_temp_c/out_hum_pct because the JS mapping expects them
-	// 3) Do NOT divide pressure here; your frontend already converts Pa->hPa when rendering
-	const aggRows = this.sql.exec(
-	  `
-	  SELECT
-		(ts / ?) * ? AS bucket_ts,
+	  // NEW: return exactly N timestamps; missing ones are null-filled
+	  const samples = [];
+	  for (let i = 0; i < cfg.maxSamples; i++) {
+		const ts = startTs + i * step;
+		const found = byTs.get(ts);
 
-		AVG(CAST(json_extract(weather_json, '$.temp') AS REAL))     AS temp,
-		AVG(CAST(json_extract(weather_json, '$.hum') AS REAL))      AS hum,
-		AVG(CAST(json_extract(weather_json, '$.pressure') AS REAL)) AS pressure,
-
-		AVG(CAST(json_extract(weather_json, '$.shelly.temperature_c') AS REAL)) AS out_temp_c,
-		AVG(CAST(json_extract(weather_json, '$.shelly.humidity_pct')  AS REAL)) AS out_hum_pct
-
-	  FROM samples
-	  WHERE ts >= ? AND ts <= ?
-	  GROUP BY bucket_ts
-	  `,
-	  BUCKET_SEC, BUCKET_SEC,
-	  startBucket, endInclusive
-	).toArray();
-
-      const byBucket = new Map();
-      for (const r of aggRows) {
-        byBucket.set(r.bucket_ts, {
-          temp:     (r.temp == null ? null : Number(r.temp)),
-          hum:      (r.hum == null ? null : Number(r.hum)),
-          pressure: (r.pressure == null ? null : Number(r.pressure)),
-          shelly: {
-            temperature_c: (r.out_temp_c == null ? null : Number(r.out_temp_c)),
-            humidity_pct:  (r.out_hum_pct == null ? null : Number(r.out_hum_pct)),
-          },
-        });
-      }
-
-      const samples = buckets.map(ts => {
-        const v = byBucket.get(ts) ?? {
-          temp: null, hum: null, pressure: null,
-          shelly: { temperature_c: null, humidity_pct: null }
-        };
-        return { ts, boot_id: null, weather: v };
-      });
-
-      return json({ range, samples });
-    }
-
+		samples.push({
+		  ts,
+		  boot_id: found?.boot_id ?? null,
+		  weather: found?.weather ?? {
+			temp: null,
+			hum: null,
+			pressure: null,
+			shelly: { temperature_c: null, humidity_pct: null }
+		  }
+		});
+	  }
+	  return json({ range, samples });
+	}
     return json({ error: "not found" }, 404);
   }
 }
@@ -426,27 +503,38 @@ export default {
 	}));
 	if (!liveRes.ok) return liveRes;
 
-	// NEW: read gatekeeper decision from WeatherDO
-	let shouldWriteHistory = false;
+	// NEW: read deterministic sampling decisions from WeatherDO
+	let dueSamples = [];
+	let lastOutdoor = null; // NEW
 	try {
 	  const liveJson = await liveRes.json();
-	  shouldWriteHistory = liveJson?.shouldWriteHistory === true;
+	  dueSamples = Array.isArray(liveJson?.dueSamples) ? liveJson.dueSamples : [];
+	  lastOutdoor = liveJson?.lastOutdoor ?? null; // NEW: latched outdoor fallback
 	} catch {
-	  // If parsing fails, default to NOT writing history (safe)
-	  shouldWriteHistory = false;
+	  dueSamples = [];
+	  lastOutdoor = null;
 	}
 
-	// history write ONLY if enabled AND gatekeeper says yes
-	if (env.HISTORY_ENABLED === "true" && shouldWriteHistory) {
-	  // NEW: run history write in background for faster device response
+
+	// NEW: only write history if enabled AND any range is due
+	if (env.HISTORY_ENABLED === "true" && dueSamples.length > 0) {
+	  // NEW: use latched outdoor values if payload.shelly is missing at the boundary
+	  const normalized = normalizeForHistory(payload, lastOutdoor);
+
+	  // NEW: batch write to History DO in background (single DO request)
 	  ctx.waitUntil(
-		histStub.fetch(new Request("https://hist/record", {
+		histStub.fetch(new Request("https://hist/record_batch", {
 		  method: "POST",
 		  headers: { "Content-Type": "application/json" },
-		  body: JSON.stringify(record),
+		  body: JSON.stringify({
+			samples: dueSamples,            // NEW: [{range, ts}, ...]
+			boot_id: record.boot_id ?? null, // NEW: preserve boot_id if available
+			weather: normalized              // NEW: normalized snapshot
+		  }),
 		}))
 	  );
 	}
+
 	return json({ ok: true });
 }
 
