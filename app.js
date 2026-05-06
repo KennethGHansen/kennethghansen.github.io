@@ -16,7 +16,7 @@
       const next = current === "sim" ? "real" : "sim";
       localStorage.setItem(KEY, next);
 
-	alert(`DEV data mode: ${next.toUpperCase()}`);
+      alert(`DEV data mode: ${next.toUpperCase()}`);
 
       // Force refresh so graphs refetch
       location.reload();
@@ -32,7 +32,7 @@
  * ============================================================================
  */
 async function loadHistoryOnce() {
-	console.log("loadHistoryOnce CALLED"); // TEMP DEBUG
+  console.log("loadHistoryOnce CALLED"); // TEMP DEBUG
   try {
     // ============================================================
     // DATA MODE (hidden toggle)
@@ -53,13 +53,18 @@ async function loadHistoryOnce() {
     // HISTORY REQUEST (mode is appended as a query param)
     // ============================================================
     // This ensures the history endpoint can switch between:
-    //   /api/history?range=24h&mode=sim
-    //   /api/history?range=24h&mode=real
+    //   /api/history?range=24h&amp;mode=sim
+    //   /api/history?range=24h&amp;mode=real
     // ============================================================
-    const res = await fetch(`/api/history?range=${historyRange}&mode=${encodeURIComponent(mode)}`, {
-      cache: "no-store"
-    });
 
+    // FIX: query separator must be "&" in JavaScript, not "&amp;"
+    //      Otherwise the Worker never receives a real "mode" param.
+
+	const res = await fetch(
+	  `/api/history?range=${historyRange}&mode=${encodeURIComponent(mode)}&t=${Date.now()}`,
+	  { cache: "no-store" }
+	);
+	
     if (!res.ok) {
       console.warn("History fetch failed:", res.status);
       renderAllHistoryCharts([]);
@@ -70,8 +75,8 @@ async function loadHistoryOnce() {
 
     // Defensive: ensure array
     const samples = (Array.isArray(data.samples) ? data.samples : [])
-	.slice()
-	.sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+      .slice()
+      .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
 
     // Cache locally (future steps will reuse this)
     historyBuf = samples;
@@ -141,8 +146,8 @@ const HISTORY_CFG = {
  * - historyState holds the running "last values" so the series is smooth
  * ============================================================================
  */
-let historyBuf = [];		// array of REAL samples used by charts
-let historyLastTs = null;		// newest REAL ts in historyBuf (null until loaded)
+let historyBuf = [];            // array of REAL samples used by charts
+let historyLastTs = null;       // newest REAL ts in historyBuf (null until loaded)
 
 /* ============================================================================
  * HISTORY VIEW STATE (frontend only)
@@ -155,12 +160,13 @@ let historyLastTs = null;		// newest REAL ts in historyBuf (null until loaded)
  * ============================================================================
  */
 let historyRange = "24h";   // default selection
+
 function setText(id, value) {
   const el = document.getElementById(id);
   if (el) el.textContent = value;
 }
 
-// Small helper function that should solve the min/max value confusion (text or string)	
+// Small helper function that should solve the min/max value confusion (text or string)
 function toNumber(v) {
   if (typeof v === "number") return v;
   if (typeof v === "string") {
@@ -232,6 +238,122 @@ function buildXAxis(historyData, range) {
 }
 
 /* ============================================================================
+ * LEFT‑ALIGNED DATE STAMP PLUGIN
+ * ============================================================================
+ *
+ * PURPOSE:
+ * - Draws a small date label directly onto the chart canvas
+ * - Positioned between:
+ *     • Y‑axis labels (left)
+ *     • First X‑axis tick label (right)
+ *
+ * WHY THIS EXISTS:
+ * - X‑axis labels are sparse, intentionally
+ * - Users still need to know WHICH DAY the chart starts on
+ * - Axis titles cannot do this without consuming layout space
+ *
+ * IMPORTANT:
+ * - This does NOT affect chart layout
+ * - This does NOT affect data
+ * - This is pure visual context only
+ *
+ * WHEN IT APPEARS:
+ * - Only for 6h and 24h views
+ * - Hidden for 7d (dates already visible there)
+ *
+ * HOW IT WORKS:
+ * - Hooks into Chart.js `afterDatasetsDraw`
+ * - Measures first X‑tick text width
+ * - Calculates safe position to the LEFT of it
+ * - Draws text using the same font as the axis ticks
+ * ============================================================================
+ */
+const leftDateStampPlugin = {
+  id: "leftDateStamp",
+
+  afterDatasetsDraw(chart, args, pluginOptions) {
+    const { ctx } = chart;
+    const { range, firstTs, singleLine } = pluginOptions || {};
+
+    // Only active for short‑range views
+    if (range !== "6h" && range !== "24h") return;
+    if (!firstTs) return;
+
+    const xScale = chart.scales?.x;
+    if (!xScale || !xScale.ticks?.length) return;
+
+    // Convert first timestamp into date parts
+    const d = new Date(firstTs * 1000);
+    const dayText   = d.toLocaleDateString([], { day: "2-digit" });
+    const monthText = d.toLocaleDateString([], { month: "short" });
+    const oneLineText = `${dayText} ${monthText}`;
+
+    // Use the same font as X‑axis labels for visual consistency
+    const tickFont = Chart.helpers.toFont(xScale.options.ticks.font);
+
+    ctx.save();
+    ctx.font = tickFont.string;
+    ctx.fillStyle = "#9ca3af";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "alphabetic";
+
+    // Pixel position of the FIRST X‑axis tick
+    const tickX = xScale.getPixelForTick(0);
+
+    // Measure first time label width so we avoid overlap
+    const firstTimeLabel = xScale.getLabelForValue(0) || "";
+    const timeLabelWidth = firstTimeLabel
+      ? ctx.measureText(firstTimeLabel).width
+      : 0;
+
+    // Measure date width
+    const dateWidth = singleLine
+      ? ctx.measureText(oneLineText).width
+      : Math.max(
+          ctx.measureText(dayText).width,
+          ctx.measureText(monthText).width
+        );
+
+    // Horizontal layout:
+    // [ DATE ][ gap ][ TIME ]
+    const GAP_PX = 8;
+    const x =
+      tickX -
+      (timeLabelWidth / 2) -
+      GAP_PX -
+      (dateWidth / 2);
+
+    // Vertical baseline aligned with tick labels
+    const lh = tickFont.lineHeight;
+    const baseY = xScale.bottom - 6;
+
+    if (singleLine) {
+      // Pressure chart: single‑line date
+      ctx.fillText(oneLineText, x, baseY);
+    } else {
+      // Temperature / Humidity: stacked day + month
+      ctx.fillText(dayText,   x, baseY - lh);
+      ctx.fillText(monthText, x, baseY);
+    }
+
+    ctx.restore();
+  }
+};
+
+/* ============================================================================
+ * GLOBAL REGISTRATION OF leftDateStampPlugin
+ * ============================================================================
+ *
+ * CRITICAL:
+ * - JavaScript `const` declarations are NOT hoisted
+ * - The plugin MUST be defined BEFORE it is registered
+ *
+ * This line makes the plugin available to all charts.
+ * ============================================================================
+ */
+Chart.register(leftDateStampPlugin);
+
+/* ============================================================================
  * Update weather function
  * ============================================================================
  */
@@ -241,18 +363,16 @@ async function updateWeather() {
 
   const w = data?.weather;
   if (!w) return;
-  
+
   // ---- Station online/offline indicator ----
   const now = Math.floor(Date.now() / 1000);
   const lastTs = toNumber(data.ts ?? w.ts);
 
   const dot = document.getElementById("station-dot");
   const label = document.getElementById("station-status");
-  const cards = document.getElementById("cards")
-  
-  
-  // consider station online if last update < 30 seconds ago
+  const cards = document.getElementById("cards");
 
+  // consider station online if last update < 30 seconds ago
   if (lastTs !== null && now - lastTs < 30) {
     // ONLINE
     dot.className = "w-3 h-3 rounded-full bg-green-500";
@@ -260,22 +380,22 @@ async function updateWeather() {
     label.className = "text-sm font-medium text-green-400";
 
     if (cards) {
-		cards.style.opacity = "1";
-		cards.style.filter = "";
-		cards.style.pointerEvents = "";
-	  }
-	} else {
-	  // OFFLINE
-	  dot.className = "w-3 h-3 rounded-full bg-red-500";
-	  label.textContent = "Weather‑Station Offline";
-	  label.className = "text-sm font-medium text-red-400";
+      cards.style.opacity = "1";
+      cards.style.filter = "";
+      cards.style.pointerEvents = "";
+    }
+  } else {
+    // OFFLINE
+    dot.className = "w-3 h-3 rounded-full bg-red-500";
+    label.textContent = "Weather‑Station Offline";
+    label.className = "text-sm font-medium text-red-400";
 
-	  if (cards) {
-		cards.style.opacity = "0.4";          // always works
-		cards.style.filter = "grayscale(1)";  // mobile Safari-safe
-		cards.style.pointerEvents = "none";   // optional
-	  }
-	}
+    if (cards) {
+      cards.style.opacity = "0.4";          // always works
+      cards.style.filter = "grayscale(1)";  // mobile Safari-safe
+      cards.style.pointerEvents = "none";   // optional
+    }
+  }
 
   // Temperature (works even if minmax/derived missing)
   if (typeof w.temp === "number") {
@@ -336,19 +456,19 @@ async function updateWeather() {
     if (typeof sh.humidity_pct === "number") {
       setText("out-humidity", sh.humidity_pct.toFixed(1) + " %");
     }
-	
-    //Battery (Only show text when battery is low
-	const battRow = document.getElementById("shelly-batt-row");
-	const battVal = document.getElementById("shelly-batt");
 
-	if (battRow && battVal) {
-	  if (typeof sh?.battery_pct === "number" && sh.battery_pct <= 25) {  // Low batt set at 25 %
-		battVal.textContent = sh.battery_pct.toFixed(0) + " %";
-		battRow.classList.remove("hidden");   // show
-	  } else {
-		battRow.classList.add("hidden");      // hide
-	  }
-	}
+    //Battery (Only show text when battery is low
+    const battRow = document.getElementById("shelly-batt-row");
+    const battVal = document.getElementById("shelly-batt");
+
+    if (battRow && battVal) {
+      if (typeof sh?.battery_pct === "number" && sh.battery_pct <= 25) {  // Low batt set at 25 %
+        battVal.textContent = sh.battery_pct.toFixed(0) + " %";
+        battRow.classList.remove("hidden");   // show
+      } else {
+        battRow.classList.add("hidden");      // hide
+      }
+    }
 
     // Outdoor min/max
     const omm = sh.minmax ?? null;
@@ -377,24 +497,22 @@ async function updateWeather() {
     const trendText = w.derived.barometer_trend.trim();
     const trendEl = document.getElementById("trend");
 
-
     // Default: no arrow, neutral color
     let displayText = trendText;
     let color = "text-slate-300";
 
-
-   if (/rising|up/i.test(trendText)) {
-       displayText = `↑ ${trendText}`;
-       color = "text-green-400";
-     } else if (/falling|down/i.test(trendText)) {
-       displayText = `↓ ${trendText}`;
-       color = "text-amber-400";
-     } else if (/steady/i.test(trendText)) {
-       displayText = `→ ${trendText}`;
-       color = "text-slate-300";
-     }
-     trendEl.textContent = displayText;
-     trendEl.className = `text-lg font-medium ${color}`;
+    if (/rising|up/i.test(trendText)) {
+      displayText = `↑ ${trendText}`;
+      color = "text-green-400";
+    } else if (/falling|down/i.test(trendText)) {
+      displayText = `↓ ${trendText}`;
+      color = "text-amber-400";
+    } else if (/steady/i.test(trendText)) {
+      displayText = `→ ${trendText}`;
+      color = "text-slate-300";
+    }
+    trendEl.textContent = displayText;
+    trendEl.className = `text-lg font-medium ${color}`;
   }
 
   if (typeof w.derived?.barometer_storm === "string") {
@@ -434,6 +552,7 @@ async function updateWeather() {
     aqEl.className = `text-lg font-medium ${color}`;
   }
 }
+
 updateWeather();
 setInterval(updateWeather, 3000);
 
@@ -496,7 +615,7 @@ if (btnHistory && overviewPage && historyPage) {
       historyPage.classList.add("hidden");
       overviewPage.classList.remove("hidden");
       btnHistory.textContent = "History";
-	  stopHistoryPolling();   
+      stopHistoryPolling();
 
     } else {
       /* ------------------------------------------------------------
@@ -508,18 +627,19 @@ if (btnHistory && overviewPage && historyPage) {
        */
       overviewPage.classList.add("hidden");
       historyPage.classList.remove("hidden");
-      btnHistory.textContent = "Overview";
-	  startHistoryPolling(); 
-	  	  
-	  // IMPORTANT:
-	  // Enforce that the time range UI reflects the TRUE state
-	  // (historyRange is already set to "24h" by default)
-	  // This prevents mismatch like:
-	  //   - 24h data loaded
-	  //   - 6h button highlighted
-	  syncHistoryRangeButtons();
 
-	  // Start controlled polling (includes initial fetch)
+      btnHistory.textContent = "Overview";
+      startHistoryPolling();
+
+      // IMPORTANT:
+      // Enforce that the time range UI reflects the TRUE state
+      // (historyRange is already set to "24h" by default)
+      // This prevents mismatch like:
+      //   - 24h data loaded
+      //   - 6h button highlighted
+      syncHistoryRangeButtons();
+
+      // Start controlled polling (includes initial fetch)
     }
   });
 }
@@ -569,12 +689,12 @@ timeButtons.forEach((btn) => {
      * This mirrors how a backend API will be queried later.
      */
 
-	historyRange = btn.textContent.trim();
-	
-	// Then redraw charts
-	if (!historyPage.classList.contains("hidden")) {
-		loadHistoryOnce();
-	}
+    historyRange = btn.textContent.trim();
+
+    // Then redraw charts
+    if (!historyPage.classList.contains("hidden")) {
+      loadHistoryOnce();
+    }
   });
 });
 
@@ -621,7 +741,6 @@ function syncHistoryRangeButtons() {
   });
 }
 
-
 /* ============================================================================
  * TEMPERATURE HISTORY CHART (Chart.js)
  * ============================================================================
@@ -650,8 +769,8 @@ function renderTemperatureChart(historyData) {
   const labels = xAxis.labels;
 
   const indoorTemps = dataArr.map(p =>
-	  (typeof p?.weather?.temp === "number") ? p.weather.temp : null
-	);
+    (typeof p?.weather?.temp === "number") ? p.weather.temp : null
+  );
 
   // ---------------------------------------------------------------------------
   // OUTDOOR TEMPERATURE SERIES (history)
@@ -666,11 +785,11 @@ function renderTemperatureChart(historyData) {
   // 2) If the value is missing, return null (so Chart.js shows a gap).
   // 3) Do not convert units here (value is already °C).
   // ---------------------------------------------------------------------------
-	const outdoorTemps = dataArr.map(p =>
-	  (typeof p?.weather?.shelly?.temperature_c === "number")
-		? p.weather.shelly.temperature_c
-		: null
-	);
+  const outdoorTemps = dataArr.map(p =>
+    (typeof p?.weather?.shelly?.temperature_c === "number")
+      ? p.weather.shelly.temperature_c
+      : null
+  );
 
   const firstTs = dataArr.length > 0 ? dataArr[0].ts : null;
 
@@ -686,9 +805,9 @@ function renderTemperatureChart(historyData) {
             borderColor: "#38bdf8",
             backgroundColor: "rgba(56,189,248,0.12)",
             tension: 0,
-            spanGaps: false,  // show real gaps (missing buckets stay empty)
+            spanGaps: false,
             showLine: true,
-            pointRadius: 0,		// no visible dot clutter
+            pointRadius: 0,
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -698,9 +817,9 @@ function renderTemperatureChart(historyData) {
             borderColor: "#a78bfa",
             backgroundColor: "rgba(167,139,250,0.12)",
             tension: 0,
-            spanGaps: false,  // show real gaps (missing buckets stay empty)
+            spanGaps: false,
             showLine: true,
-            pointRadius: 0,		// no visible dot clutter
+            pointRadius: 0,
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -708,10 +827,14 @@ function renderTemperatureChart(historyData) {
       },
       options: {
         responsive: true,
-        maintainAspectRatio: false,		
-	
+        maintainAspectRatio: false,
+
         plugins: {
           legend: { labels: { color: "#e5e7eb" } },
+          leftDateStamp: {
+            range: historyRange,
+            firstTs
+          }
         },
         scales: {
           x: {
@@ -767,28 +890,18 @@ function renderHumidityChart(historyData) {
   const labels = xAxis.labels;
 
   const indoorHum = dataArr.map(p =>
-	  (typeof p?.weather?.hum === "number") ? p.weather.hum : null
-	);
+    (typeof p?.weather?.hum === "number") ? p.weather.hum : null
+  );
 
   // ---------------------------------------------------------------------------
   // OUTDOOR HUMIDITY SERIES (history)
-  // ---------------------------------------------------------------------------
-  // WHY THIS EXISTS:
-  // - Your backend (SIM + REAL) includes outdoor humidity under:
-  //     weather.shelly.humidity_pct
-  // - Previously we hard-coded outdoorHum to null, so the chart was blank.
-  //
-  // DESIGN RULES:
-  // 1) Use ONLY real numeric values.
-  // 2) If the value is missing, return null (so Chart.js shows a gap).
-  // 3) Units are already percent (%) so no conversion is needed.
   // ---------------------------------------------------------------------------
   const outdoorHum = dataArr.map(p =>
     (typeof p?.weather?.shelly?.humidity_pct === "number")
       ? p.weather.shelly.humidity_pct
       : null
   );
-  
+
   const firstTs = dataArr.length > 0 ? dataArr[0].ts : null;
 
   if (!humidityChart) {
@@ -803,9 +916,9 @@ function renderHumidityChart(historyData) {
             borderColor: "#34d399",
             backgroundColor: "rgba(52,211,153,0.12)",
             tension: 0,
-            spanGaps: false,  // show real gaps (missing buckets stay empty)
+            spanGaps: false,
             showLine: true,
-            pointRadius: 0,		// no visible dot clutter
+            pointRadius: 0,
             pointHoverRadius: 6,
             borderWidth: 2
           },
@@ -815,9 +928,9 @@ function renderHumidityChart(historyData) {
             borderColor: "#fbbf24",
             backgroundColor: "rgba(251,191,36,0.12)",
             tension: 0,
-            spanGaps: false,  // show real gaps (missing buckets stay empty)
+            spanGaps: false,
             showLine: true,
-            pointRadius: 0,		// no visible dot clutter
+            pointRadius: 0,
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -826,9 +939,14 @@ function renderHumidityChart(historyData) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-		
+
         plugins: {
           legend: { labels: { color: "#e5e7eb" } },
+          leftDateStamp: {
+            range: historyRange,
+            firstTs,
+            singleLine: false
+          }
         },
         scales: {
           x: {
@@ -884,10 +1002,10 @@ function renderPressureChart(historyData) {
   const labels = xAxis.labels;
 
   const pressure = dataArr.map(p =>
-	  (typeof p?.weather?.pressure === "number")
-		? p.weather.pressure / 100   // Pa → hPa
-		: null
-	);
+    (typeof p?.weather?.pressure === "number")
+      ? p.weather.pressure / 100   // Pa → hPa
+      : null
+  );
 
   const firstTs = dataArr.length > 0 ? dataArr[0].ts : null;
 
@@ -903,9 +1021,9 @@ function renderPressureChart(historyData) {
             borderColor: "#60a5fa",
             backgroundColor: "rgba(96,165,250,0.12)",
             tension: 0,
-            spanGaps: false,  // show real gaps (missing buckets stay empty)
+            spanGaps: false,
             showLine: true,
-            pointRadius: 0,		// no visible dot clutter
+            pointRadius: 0,
             pointHoverRadius: 6,
             borderWidth: 2
           }
@@ -914,9 +1032,14 @@ function renderPressureChart(historyData) {
       options: {
         responsive: true,
         maintainAspectRatio: false,
-	
+
         plugins: {
           legend: { labels: { color: "#e5e7eb" } },
+          leftDateStamp: {
+            range: historyRange,
+            firstTs,
+            singleLine: true
+          }
         },
         scales: {
           x: {
